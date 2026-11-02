@@ -22,6 +22,12 @@ static int usp_get_cert_mode(bool *enabled)
 
 static int usp_set_cert_mode(bool enabled)
 {
+#ifndef CONFIG_LORA_BASICS_MODEM_CERTIFICATION
+	if (enabled) {
+		return -RZI_ERR_NOT_SUPPORTED;
+	}
+#endif
+
 	int rc = rzi_lorawan_usp_enter();
 
 	if (rc != 0) {

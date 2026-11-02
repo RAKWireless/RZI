@@ -63,6 +63,18 @@ patches:
       tags; base64 is BSD-3-Clause, and the Gladman AES and Casado/Tsigas CMAC
       files get LicenseRef identifiers for the texts kept in LICENSES.txt.
 
+  - path: usp/0012-optional-certification-and-test-mode.patch
+    sha256sum: 49c674ce90c98eed615d7da6533c359635c9a97523a3a7298bead976e01bc4b3
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-02
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Make the LoRaWAN certification package and the test mode optional
+      (ADD_LBM_CERTIFICATION, ADD_LBM_TEST_MODE).
+
   - path: usp_zephyr/0005-stm32wl-subghz-radio.patch
     sha256sum: 8dcaad970167a2a00daa0cbb05ea120b1d848a33705d1b8d778319010891ac75
     module: usp_zephyr
@@ -102,6 +114,18 @@ patches:
       ISR masks NVIC and the HAL arms it again after that command. A radio
       reset also clears PB0-VDD_TCXO; park SYSCLK on HSI, program the
       regulator, then restore the HSE PLL when SYSCLK uses the TCXO.
+
+  - path: usp_zephyr/0013-optional-certification-and-test-mode.patch
+    sha256sum: 75d39b777d2ff712d837b2000d75396e1771d7e0279ed819321b7e83366fd84a
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-02
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Add LORA_BASICS_MODEM_CERTIFICATION and LORA_BASICS_MODEM_TEST_MODE
+      (both default y).
 
   - path: zephyr/0010-stm32-spi-resume-config.patch
     sha256sum: 544b6c60762a6cdc384ca8cc8444da64299f28bf0302167f4ff8ce8ea51b63a2

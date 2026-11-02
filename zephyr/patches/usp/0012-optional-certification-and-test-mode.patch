@@ -1,0 +1,120 @@
+diff --git a/protocols/lbm_lib/smtc_modem_core/modem_utilities/modem_services_config.h b/protocols/lbm_lib/smtc_modem_core/modem_utilities/modem_services_config.h
+index d1dc14c3..3ff5853c 100644
+--- a/protocols/lbm_lib/smtc_modem_core/modem_utilities/modem_services_config.h
++++ b/protocols/lbm_lib/smtc_modem_core/modem_utilities/modem_services_config.h
+@@ -112,7 +112,9 @@ typedef struct modem_service_config_s
+ } modem_service_config_t;
+ 
+ static modem_service_config_t modem_service_config[] = {
++#if defined( ADD_LBM_CERTIFICATION )
+     { .service_id = 0, .stack_id = 0, .callbacks_init_service = lorawan_certification_services_init },
++#endif
+ #ifdef ADD_RELAY_RX
+     { .service_id = 0, .stack_id = 0, .callbacks_init_service = lorawan_relay_rx_services_init },
+ #endif
+diff --git a/protocols/lbm_lib/smtc_modem_core/smtc_modem.c b/protocols/lbm_lib/smtc_modem_core/smtc_modem.c
+index 60318128..f3963de0 100644
+--- a/protocols/lbm_lib/smtc_modem_core/smtc_modem.c
++++ b/protocols/lbm_lib/smtc_modem_core/smtc_modem.c
+@@ -1040,10 +1040,14 @@ smtc_modem_return_code_t smtc_modem_get_certification_mode( uint8_t stack_id, bo
+ {
+     RETURN_BUSY_IF_TEST_MODE( );
+ 
++#if defined( ADD_LBM_CERTIFICATION )
+     if( lorawan_certification_get_enabled( stack_id, enable ) != LORAWAN_CERTIFICATION_OK )
+     {
+         return SMTC_MODEM_RC_FAIL;
+     }
++#else
++    *enable = false;
++#endif
+ 
+     return SMTC_MODEM_RC_OK;
+ }
+@@ -1052,6 +1056,7 @@ smtc_modem_return_code_t smtc_modem_set_certification_mode( uint8_t stack_id, bo
+ {
+     RETURN_BUSY_IF_TEST_MODE( );
+ 
++#if defined( ADD_LBM_CERTIFICATION )
+     if( lorawan_certification_set_enabled( stack_id, enable ) != LORAWAN_CERTIFICATION_OK )
+     {
+         return SMTC_MODEM_RC_FAIL;
+@@ -1061,6 +1066,9 @@ smtc_modem_return_code_t smtc_modem_set_certification_mode( uint8_t stack_id, bo
+         smtc_secure_element_store_context( stack_id );
+     }
+     return SMTC_MODEM_RC_OK;
++#else
++    return ( enable == true ) ? SMTC_MODEM_RC_FAIL : SMTC_MODEM_RC_OK;
++#endif
+ }
+ 
+ smtc_modem_return_code_t smtc_modem_request_emergency_uplink( uint8_t stack_id, uint8_t fport, bool confirmed,
+diff --git a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+index db01ac25..a693b805 100755
+--- a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
++++ b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+@@ -778,12 +778,14 @@ static status_lorawan_t manage_lbt_state( void )
+ {
+     uint32_t target_time_lbt = current_tpm_target_time_ms;
+ 
++#if defined( ADD_LBM_TEST_MODE )
+     if( current_tpm_request_type == TX_PROTOCOL_TRANSMIT_TEST_MODE )
+     {
+         smtc_lbt_listen_channel( smtc_lbt_get_obj( current_tpm_stack_id ),
+                                  ( smtc_modem_test_get_context ) ( )->tx_frequency, false, target_time_lbt, 0 );
+         return OKLORAWAN;
+     }
++#endif
+     lr1_stack_mac_t* lr1mac_obj = lorawan_api_stack_mac_get( current_tpm_stack_id );
+ 
+     if( current_tpm_transmit_at_time == true )
+@@ -957,6 +959,7 @@ static status_lorawan_t manage_csma_state( void )
+ {
+     uint32_t target_time_csma = current_tpm_target_time_ms;
+ 
++#if defined( ADD_LBM_TEST_MODE )
+     if( current_tpm_request_type == TX_PROTOCOL_TRANSMIT_TEST_MODE )
+     {
+         modem_test_context_t* test_mode_context = smtc_modem_test_get_context( );
+@@ -967,6 +970,7 @@ static status_lorawan_t manage_csma_state( void )
+             test_mode_context->invert_iq );
+         return OKLORAWAN;
+     }
++#endif
+     lr1_stack_mac_t* lr1mac_obj = lorawan_api_stack_mac_get( current_tpm_stack_id );
+     if( smtc_real_get_modulation_type_from_datarate( lr1mac_obj->real, lr1mac_obj->tx_data_rate ) == LORA )
+     {
+@@ -1223,7 +1227,7 @@ static void compute_tpm_list( void )
+     reset_tpm_list( );
+     if( current_tpm_request_type == TX_PROTOCOL_TRANSMIT_TEST_MODE )
+     {
+-#if defined( ADD_CSMA )
++#if defined( ADD_CSMA ) && defined( ADD_LBM_TEST_MODE )
+         modem_test_context_t* test_mode_context = smtc_modem_test_get_context( );
+         if( ( smtc_lora_cad_bt_get_state( smtc_cad_get_obj( current_tpm_stack_id ) ) == true ) &&
+             ( test_mode_context->modulation_type == LORA ) )
+@@ -1358,10 +1362,12 @@ static void tpm_abort( void )
+ {
+     reset_tpm_list( );
+     current_tpm_transmit_is_aborted = true;
++#if defined( ADD_LBM_TEST_MODE )
+     if( current_tpm_request_type == TX_PROTOCOL_TRANSMIT_TEST_MODE )
+     {
+         test_mode_cb_tpm( current_tpm_data, current_tpm_data_len, true );
+     }
++#endif
+ 
+     lorawan_api_core_abort( current_tpm_stack_id );
+ }
+@@ -1378,7 +1384,11 @@ static status_lorawan_t manage_idle_state( void )
+ static status_lorawan_t manage_test_mode( void )
+ {
+     shift_left_tpm_list( );
++#if defined( ADD_LBM_TEST_MODE )
+     return ( test_mode_cb_tpm( current_tpm_data, current_tpm_data_len, false ) );
++#else
++    return ERRORLORAWAN;
++#endif
+ }
+ static void update_tpm_target_time( void )
+ {
