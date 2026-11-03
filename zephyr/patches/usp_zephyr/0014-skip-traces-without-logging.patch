@@ -1,0 +1,56 @@
+diff --git a/include/zephyr/usp/smtc_hal_dbg_trace.h b/include/zephyr/usp/smtc_hal_dbg_trace.h
+index 967abe5..eda30d8 100644
+--- a/include/zephyr/usp/smtc_hal_dbg_trace.h
++++ b/include/zephyr/usp/smtc_hal_dbg_trace.h
+@@ -66,13 +66,16 @@ void smtc_str_trim_end( char* text );
+  * @brief This macro matches the Semtech LBM logging macros with the logging
+  * macros LOG_* from zephyr, while trimming the endlines present in LBM.
+  */
+-#define SMTC_LOG( log_fn, ... )                                        \
+-    do                                                                 \
+-    {                                                                  \
+-        char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
+-        snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
+-        smtc_str_trim_end( __log_buffer );                             \
+-        log_fn( "%s", __log_buffer );                                  \
++#define SMTC_LOG( log_fn, ... )                                            \
++    do                                                                     \
++    {                                                                      \
++        if( IS_ENABLED( CONFIG_LOG ) )                                     \
++        {                                                                  \
++            char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
++            snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
++            smtc_str_trim_end( __log_buffer );                             \
++            log_fn( "%s", __log_buffer );                                  \
++        }                                                                  \
+     } while( 0 )
+ 
+ #define SMTC_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_INF, "%s", msg );
+diff --git a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+index 9057391..eb874ab 100644
+--- a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
++++ b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+@@ -81,13 +81,16 @@ void smtc_str_trim_end( char* text );
+  * @brief This macro matches the Semtech LBM logging macros with the logging
+  * macros LOG_* from zephyr, while trimming the endlines present in LBM.
+  */
+-#define SMTC_LOG( log_fn, ... )                                        \
+-    do                                                                 \
+-    {                                                                  \
+-        char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
+-        snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
+-        smtc_str_trim_end( __log_buffer );                             \
+-        log_fn( "%s", __log_buffer );                                  \
++#define SMTC_LOG( log_fn, ... )                                            \
++    do                                                                     \
++    {                                                                      \
++        if( IS_ENABLED( CONFIG_LOG ) )                                     \
++        {                                                                  \
++            char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
++            snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
++            smtc_str_trim_end( __log_buffer );                             \
++            log_fn( "%s", __log_buffer );                                  \
++        }                                                                  \
+     } while( 0 )
+ 
+ #define MODEM_HAL_DBG_TRACE MODEM_HAL_FEATURE_ON
