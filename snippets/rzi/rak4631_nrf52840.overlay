@@ -6,6 +6,24 @@
 / {
 	chosen {
 		zephyr,lorawan-transceiver = &lora;
+		lora-basics-modem-context-partition = &lora_context_partition;
+	};
+};
+
+/delete-node/ &storage_partition;
+
+/* LoRa Basics Modem writes its context without NVS: keep it out of storage. */
+&flash0 {
+	partitions {
+		storage_partition: partition@f8000 {
+			label = "storage";
+			reg = <0x000f8000 0x00006000>;
+		};
+
+		lora_context_partition: partition@fe000 {
+			label = "lora_context";
+			reg = <0x000fe000 0x00002000>;
+		};
 	};
 };
 
