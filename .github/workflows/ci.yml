@@ -212,7 +212,7 @@ jobs:
 
       - name: Upload the twister results
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: twister-results
           path: |
@@ -225,7 +225,7 @@ jobs:
 
       - name: Upload the twister report on failure
         if: failure()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: twister-report
           path: twister-out/
@@ -280,7 +280,7 @@ jobs:
 
       - name: Upload the sample results
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: twister-samples-results-${{ matrix.shard }}
           path: |
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload the twister report on failure
         if: failure()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: twister-samples-report-${{ matrix.shard }}
           path: twister-out/
@@ -352,7 +352,7 @@ jobs:
           done
 
       - name: Upload the firmware SBOM
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: firmware-sbom-at-rak4631_nrf52840_rzi
           path: build-sbom/spdx/
@@ -503,7 +503,7 @@ jobs:
           python3 tools/sbom/check-sbom.py --strict build/sbom/rzi.spdx.jsonld build/sbom/rzi.cdx.json
 
       - name: Upload the module SBOM
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-module-sbom
           path: rzi/build/sbom/
