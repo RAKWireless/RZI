@@ -24,7 +24,7 @@ index 967abe5..eda30d8 100644
 +            log_fn( "%s", __log_buffer );                                  \
 +        }                                                                  \
      } while( 0 )
- 
+
  #define SMTC_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_INF, "%s", msg );
 diff --git a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
 index 9057391..eb874ab 100644
@@ -52,5 +52,5 @@ index 9057391..eb874ab 100644
 +            log_fn( "%s", __log_buffer );                                  \
 +        }                                                                  \
      } while( 0 )
- 
+
  #define MODEM_HAL_DBG_TRACE MODEM_HAL_FEATURE_ON

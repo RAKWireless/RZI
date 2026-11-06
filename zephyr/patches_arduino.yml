@@ -133,7 +133,7 @@ patches:
       Drop this patch once the pinned Zephyr revision contains it.
 
   - path: usp/0012-optional-certification-and-test-mode.patch
-    sha256sum: 49c674ce90c98eed615d7da6533c359635c9a97523a3a7298bead976e01bc4b3
+    sha256sum: 86fde47f94d32adcd667f0d20a7483571afaeb467085ba6e3d93613b96e68299
     module: usp
     author: rzi
     email: patches@rzi.local
@@ -145,7 +145,7 @@ patches:
       (ADD_LBM_CERTIFICATION, ADD_LBM_TEST_MODE).
 
   - path: usp_zephyr/0013-optional-certification-and-test-mode.patch
-    sha256sum: 75d39b777d2ff712d837b2000d75396e1771d7e0279ed819321b7e83366fd84a
+    sha256sum: e05994cb203e96dfb204e1f4f2fb91024c7a3de3652a4bcf19d836e6eb836cff
     module: usp_zephyr
     author: rzi
     email: patches@rzi.local
@@ -157,7 +157,7 @@ patches:
       (both default y).
 
   - path: usp_zephyr/0014-skip-traces-without-logging.patch
-    sha256sum: 0113ae1fe54186105544af9e9bc4b671504700a523df4d8e604bea40f99afeb2
+    sha256sum: 31c6ba10930b49b0ca2b35deaab7bb9032cb4d513806c5e422267b8407b7515c
     module: usp_zephyr
     author: rzi
     email: patches@rzi.local
