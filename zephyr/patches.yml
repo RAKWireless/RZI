@@ -112,6 +112,32 @@ patches:
       reset also clears PB0-VDD_TCXO; park SYSCLK on HSI, program the
       regulator, then restore the HSE PLL when SYSCLK uses the TCXO.
 
+  - path: usp_zephyr/0012-skip-disabled-log-formatting.patch
+    sha256sum: 4c092cf454417d74ef31e1f1d5202d420eb47c9cd9a12842a44716abc6147e8b
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-09
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Skip USP trace formatting and string trimming when CONFIG_LOG is off.
+      Disabled Zephyr logging must not retain modem log strings or perform
+      snprintf calls before discarding the output.
+
+  - path: usp_zephyr/0013-gate-2g4-region-on-radio-support.patch
+    sha256sum: 127510d322fa6a57a834d5e9767d4a2235481bfb2aff06a93907938288eb373c
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-09
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Only enable the WW_2G4 region for supported 2.4 GHz transceivers.
+      The all-regions option retains every Sub-GHz region on STM32WL and
+      SX126x boards without compiling the unsupported 2.4 GHz region.
+
   - path: zephyr/0009-stm32wl-locked-pm-resume.patch
     sha256sum: 22b3f283240da422119fcb8ccb2cd0f39f62f153073ec22a23086749eee19b92
     module: zephyr

@@ -88,7 +88,7 @@ jobs:
             -r zephyr/scripts/requirements-base.txt \
             -r zephyr/scripts/requirements-build-test.txt \
             -r zephyr/scripts/requirements-run-test.txt \
-            imgtool
+            imgtool "reuse==6.2.0"
 
       - name: Set up the Zephyr SDK
         uses: ./rzi/.github/actions/setup-sdk
@@ -112,7 +112,7 @@ jobs:
             args=()
             for doc in "${image}"*.jsonld; do args+=(-j "${doc}"); done
             spdx3-validate -q "${args[@]}"
-            python3 rzi/tools/sbom/check-sbom.py --strict "${image}"*.jsonld
+            python3 rzi/tools/sbom/check-sbom.py --strict --firmware "${image}"*.jsonld
           done
 
       - name: Collect the images
@@ -153,7 +153,7 @@ jobs:
 
       - name: Install the SBOM tools
         run: |
-          python3 -m pip install pyyaml reuse spdx3-validate \
+          python3 -m pip install pyyaml "reuse==6.2.0" spdx3-validate \
             "cyclonedx-python-lib[json-validation]"
 
       - name: The tag matches the RZI version

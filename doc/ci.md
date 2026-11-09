@@ -105,9 +105,15 @@ that version changes.
 | `ZEPHYR_SDK_VERSION` | `ci.yml` env | Match the SDK required by the Zephyr revision |
 | `CLANG_FORMAT_VERSION` | `ci.yml` env | Same release developers run locally |
 | `DOXYGEN_VERSION` | `ci.yml` env | Same release developers run locally |
+| REUSE 6.2.0 | SBOM installs in `ci.yml` and `release.yml` | Verify the pinned Zephyr scanner API before changing |
 
 `west.yml` is the only copy of the Zephyr and USP revisions; CI reads them
 from there.
+
+The SBOM jobs pin REUSE because the Zephyr 4.5 scanner calls
+`ReuseTOML.from_file(path)`. A REUSE release requiring an additional `root`
+argument prevents license scanning and leaves source packages unlicensed
+in the generated SBOM. Strict license validation remains enabled.
 
 ## Compliance scope
 

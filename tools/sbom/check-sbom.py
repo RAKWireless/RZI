@@ -5,7 +5,7 @@
 
 Usage:
 
-  tools/sbom/check-sbom.py [--strict] FILE [FILE ...]
+  tools/sbom/check-sbom.py [--strict] [--firmware] FILE [FILE ...]
 
 FILE is an SPDX 3 JSON-LD document (*.jsonld) or a CycloneDX JSON document
 (*.cdx.json). All SPDX 3 files given are merged into one graph, so the four
@@ -50,7 +50,7 @@ DEPENDENCY_TYPES = {
 }
 
 
-def check_spdx3(paths: list[Path]) -> list[str]:
+def check_spdx3(paths: list[Path], *, firmware: bool = False) -> list[str]:
     graph = []
     for path in paths:
         graph.extend(json.loads(path.read_text("utf-8"))["@graph"])
@@ -132,6 +132,63 @@ def check_spdx3(paths: list[Path]) -> list[str]:
             missing.append("dependency")
         if missing:
             gaps.append(f"{name}: missing {', '.join(missing)}")
+    if firmware:
+        gaps.extend(check_firmware_graph(graph, by_id))
+    return gaps
+
+
+def check_firmware_graph(graph: list[dict], by_id: dict) -> list[str]:
+    """Require build provenance and hashed flashed images in the merged graph."""
+    gaps = []
+    relationships: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+    for element in graph:
+        if element["type"] in ("Relationship", "LifecycleScopedRelationship"):
+            relationships[element["from"]][element["relationshipType"]].update(element["to"])
+
+    builds = [element for element in graph if element["type"] == "build_Build"]
+    if not builds:
+        gaps.append("firmware provenance: no build_Build elements")
+    for build in builds:
+        links = relationships[build["spdxId"]]
+        for kind in ("hasInput", "hasOutput", "usesTool"):
+            targets = links[kind]
+            if not targets or any(target not in by_id for target in targets):
+                gaps.append(f"{build['spdxId']}: missing or unresolved {kind}")
+        if not build.get("build_buildType"):
+            gaps.append(f"{build['spdxId']}: missing build type")
+
+    artifacts = [
+        element
+        for element in graph
+        if element["type"] == "software_File"
+        and element.get("software_primaryPurpose") == "firmware"
+    ]
+    if not artifacts:
+        gaps.append("firmware artifacts: no flashed image files")
+    roots = {
+        root
+        for element in graph
+        if element["type"] == "software_Sbom" and "build" in element.get("software_sbomType", [])
+        for root in element.get("rootElement", [])
+    }
+    for artifact in artifacts:
+        artifact_id = artifact["spdxId"]
+        hashes = {
+            item["algorithm"] for item in artifact.get("verifiedUsing", []) if item.get("hashValue")
+        }
+        if not {"sha256", "sha512"} <= hashes:
+            gaps.append(f"{artifact['name']}: missing SHA-256 / SHA-512 image hashes")
+        if artifact_id not in roots:
+            gaps.append(f"{artifact['name']}: not a build SBOM root")
+        origins = [
+            source
+            for source, links in relationships.items()
+            if artifact_id in links["generates"]
+            and by_id.get(source, {}).get("type") == "software_File"
+            and any(source in relationships[build["spdxId"]]["hasOutput"] for build in builds)
+        ]
+        if not origins:
+            gaps.append(f"{artifact['name']}: missing generation provenance")
     return gaps
 
 
@@ -190,16 +247,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("files", nargs="+", type=Path)
     parser.add_argument("--strict", action="store_true", help="fail when a gap is found")
+    parser.add_argument(
+        "--firmware",
+        action="store_true",
+        help="also require build provenance and hashed flashed images",
+    )
     args = parser.parse_args()
 
     groups: dict[str, list[Path]] = defaultdict(list)
     for path in args.files:
         groups["spdx3" if path.suffix == ".jsonld" else "cyclonedx"].append(path)
 
+    if args.firmware and not groups["spdx3"]:
+        parser.error("--firmware requires SPDX 3 JSON-LD build documents")
+
     failed = False
     if groups["spdx3"]:
         failed |= report(
-            "SPDX 3: " + ", ".join(map(str, groups["spdx3"])), check_spdx3(groups["spdx3"])
+            "SPDX 3: " + ", ".join(map(str, groups["spdx3"])),
+            check_spdx3(groups["spdx3"], firmware=args.firmware),
         )
     for path in groups["cyclonedx"]:
         failed |= report(f"CycloneDX: {path}", check_cyclonedx(path))

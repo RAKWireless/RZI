@@ -1,0 +1,11 @@
+diff --git a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+--- a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
++++ b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+@@ -84,6 +84,7 @@
+ #define SMTC_LOG( log_fn, ... )                                        \
+     do                                                                 \
+     {                                                                  \
++        if( !IS_ENABLED( CONFIG_LOG ) ) { break; }                      \
+         char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
+         snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
+         smtc_str_trim_end( __log_buffer );                             \

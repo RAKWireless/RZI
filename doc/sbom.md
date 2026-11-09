@@ -100,7 +100,7 @@ not emit yet. Validate an image's documents together:
 
 ```sh
 spdx3-validate $(for f in build/at/spdx/at/*.jsonld; do echo -j "$f"; done)
-python3 rzi/tools/sbom/check-sbom.py --strict build/at/spdx/at/*.jsonld
+python3 rzi/tools/sbom/check-sbom.py --strict --firmware build/at/spdx/at/*.jsonld
 ```
 
 The documents can be explored with the SPDX 3 visualizer at
@@ -148,6 +148,35 @@ module's reference package. Modules that contributed no files are not in
 the image and are skipped. CycloneDX documents are also validated against
 the 1.6 schema. CI runs the check with `--strict`.
 
+## Build-aware readiness checks
+
+The workflow follows the build-aware approach presented in Benjamin Cabe's
+"CRA readiness with SPDX 3 SBOMs in Zephyr" (Zephyr Developer Summit,
+October 7, 2026):
+
+| Reference topic | RZI implementation |
+|---|---|
+| SPDX 3.0.1 JSON-LD and build metadata (slides 22-23) | Each sysbuild image supplies metadata; all four west documents and the image supplement are validated together |
+| Module identity (slide 20) | CPE / PURL in `zephyr/module.yml`, copied into firmware SBOMs |
+| REUSE license scanning (slide 21) | File annotations and dependency REUSE patches; REUSE 6.2.0 is pinned for the Zephyr 4.5 scanner API |
+| Build provenance (slides 25-26) | `--firmware` requires build steps with resolved inputs, outputs, and tools, plus a build type |
+| Shipped artifacts (slides 34, 40) | Flashed files are build-SBOM roots with SHA-256 / SHA-512 and a generation relationship from a build output |
+| Release archival (slide 40) | Firmware, ELF files, per-image SBOM graphs, and asset checksums are archived together |
+
+The firmware CI and release gates use `check-sbom.py --strict --firmware`.
+A source-module SBOM alone cannot satisfy the firmware gate. Workspace
+module references alone also do not establish that a vulnerable function
+is present in the final binary: use the build graph and, when necessary,
+linker or source analysis to determine impact.
+
+SBOM validation supports readiness; it does not establish full CRA
+conformity. Vulnerability assessment and VEX verdicts remain separate from
+the SBOM. No VEX verdict is inferred automatically from a package name or
+an unused workspace reference. Product owners still need to maintain
+security monitoring, triage, support, and reporting procedures. The
+minimum-elements gate is not a substitute for reviewing file-level
+license and copyright coverage, including generated and third-party code.
+
 ## Releases {#releases}
 
 `.github/workflows/release.yml` runs on a `v<version>` tag that matches
@@ -167,7 +196,7 @@ pre-releases. See [maintainer-workflow.md](maintainer-workflow.md) for the
 release and tag-protection procedure.
 
 Release images: `samples/at` on RAK4631 and RAK3362, and
-`samples/lorawan/periodical_uplink` on RAK4631, RAK3362, and RAK3372.
+`samples/lorawan/periodical_uplink` on RAK4631, RAK3362, and RAK3172.
 
 ## Version bumps
 
