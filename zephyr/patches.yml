@@ -126,7 +126,7 @@ patches:
       snprintf calls before discarding the output.
 
   - path: usp_zephyr/0013-gate-2g4-region-on-radio-support.patch
-    sha256sum: 127510d322fa6a57a834d5e9767d4a2235481bfb2aff06a93907938288eb373c
+    sha256sum: dcb6e16c5ea2cceddd76308d7d11c64c762edcbaa2c14a54f43d29afd2b2d0d3
     module: usp_zephyr
     author: rzi
     email: patches@rzi.local

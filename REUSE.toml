@@ -21,6 +21,7 @@ SPDX-License-Identifier = "Apache-2.0"
 # Diffs against Semtech sources carry the license of the code they modify.
 [[annotations]]
 path = "zephyr/patches/**.patch"
+Zephyr-Description = "RZI patches for Semtech and Zephyr dependencies"
 precedence = "override"
 SPDX-FileCopyrightText = [
     "Copyright Semtech Corporation 2025",
