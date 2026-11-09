@@ -71,12 +71,14 @@ runs:
         git -C "${GITHUB_WORKSPACE}/manifest" \
           -c user.name=rzi-ci -c user.email=ci@localhost commit -qm "CI manifest"
         cd "${GITHUB_WORKSPACE}"
-        # A cache hit restores usp_zephyr with the previous run's patches
-        # still in the worktree. west update will not discard those edits.
-        if [[ -d modules/usp_zephyr/.git ]]; then
-          git -C modules/usp_zephyr reset --hard
-          git -C modules/usp_zephyr clean -fd
-        fi
+        # Cached dependencies retain the previous run's patches. Discard
+        # those CI-generated edits before west switches pinned revisions.
+        for project in zephyr modules/usp_zephyr modules/lib/usp; do
+          if [[ -d "${project}/.git" ]]; then
+            git -C "${project}" reset --hard
+            git -C "${project}" clean -fd
+          fi
+        done
         west init -l manifest
         # Blobless narrow fetch. clone-depth 1 plus a pinned SHA is rejected
         # by git as an unadvertised object, which fails this step immediately.

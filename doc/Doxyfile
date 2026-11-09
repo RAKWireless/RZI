@@ -76,6 +76,8 @@ INPUT                  = ../include/rzi \
                          west-patch.md \
                          lorawan-api.md \
                          lora-api.md \
+                         network-mode-api.md \
+                         api-design.md \
                          lorawan-backends.md \
                          lorawan-backend-zephyr.md \
                          fuota.md \
