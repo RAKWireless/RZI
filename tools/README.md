@@ -29,3 +29,11 @@ than a user's home directory. Group tools one level deep by responsibility:
 `ci/`, `docs/`, `sbom/`, and `patches/`. Keep tooling tests together in
 `tests/`; add new categories when actual tools need them. Application examples belong in
 `samples/`, and firmware behavior tests belong in `tests/`.
+
+## Local CI preflight
+
+Use `ci/preflight.py --mode quick` or `--mode full` with
+`--compliance-python PATH` to run shared CI gates. `--staged` checks the Git
+index in a disposable clone without including other working changes.
+See [CI local reproduction](../doc/ci.md#local-reproduction) for isolated
+Python environments, dependency locks, prerequisites and diagnostic logs.

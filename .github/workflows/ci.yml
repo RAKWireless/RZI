@@ -30,7 +30,6 @@ env:
   # The Zephyr and USP revisions come from west.yml. The SDK must match
   # that Zephyr revision.
   ZEPHYR_SDK_VERSION: "1.0.1"
-  CLANG_FORMAT_VERSION: "23.1.0"
   DOXYGEN_VERSION: "1.13.2"
 
 jobs:
@@ -44,20 +43,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install verified actionlint
-        env:
-          ACTIONLINT_VERSION: '1.7.11'
-          ACTIONLINT_SHA256: 900919a84f2229bac68ca9cd4103ea297abc35e9689ebb842c6e34a3d1b01b0a
-        run: |
-          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl --fail --silent --show-error --location \
-            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}" \
-            --output "$RUNNER_TEMP/$archive"
-          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$RUNNER_TEMP/$archive" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
-
       - name: Validate workflow syntax and expressions
-        run: '"$RUNNER_TEMP/actionlint" -shellcheck= .github/workflows/*.yml'
+        run: tools/ci/check-workflows.sh
 
   commits:
     name: Commit policy
@@ -105,12 +92,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libmagic1
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-actions.txt \
-            --require-hashes
-
-      - name: Install clang-format
-        run: python3 -m pip install "clang-format==${CLANG_FORMAT_VERSION}"
+          rzi/tools/ci/install-deps.sh compliance
 
       - name: Set up Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
@@ -132,22 +114,13 @@ jobs:
           ZEPHYR_BASE: ${{ github.workspace }}/zephyr
         run: |
           range="$(python3 tools/ci/check-commits.py --event "$GITHUB_EVENT_PATH" --range-only)"
-          tools/ci/check-compliance.sh "${range}"
+          set -o pipefail
+          mkdir -p reports
+          tools/ci/check-compliance.sh "${range}" 2>&1 | tee reports/compliance.log
 
-      - name: Public ABI must not leak backend symbols
-        run: |
-          if grep -rnE '\b(smtc_[a-z]|LoRaMac|LmHandler|Mcps|Mlme|ral_[a-z]|sx126|sx127|lr11)' \
-              rzi/include/rzi/; then
-            echo "::error::private backend symbols leaked into include/rzi/"
-            exit 1
-          fi
-
-      - name: Source must be ASCII
-        run: |
-          if LC_ALL=C grep -rnP '[^\x00-\x7F]' rzi/src rzi/include; then
-            echo "::error::non-ASCII text in source"
-            exit 1
-          fi
+      - name: Public ABI, source encoding, and version consistency
+        working-directory: rzi
+        run: tools/ci/check-source.sh
 
       - name: REUSE (license and copyright on every file)
         # Run inside the repository. `reuse --root rzi` from the workspace
@@ -156,12 +129,14 @@ jobs:
         working-directory: rzi
         run: reuse lint
 
-      - name: Version strings stay in sync
-        run: |
-          version="$(grep -oP 'RZI_VERSION_STRING "\K[^"]+' rzi/include/rzi/version.h)"
-          grep -q "PROJECT_NUMBER         = ${version}" rzi/doc/Doxyfile
-          grep -q "cpe:2.3:a:rakwireless:rzi:${version}:" rzi/zephyr/module.yml
-          grep -q "pkg:github/RAKWireless/RZI@v${version}$" rzi/zephyr/module.yml
+      - name: Upload compliance diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: compliance-diagnostics
+          path: rzi/reports/
+          if-no-files-found: ignore
+          retention-days: 7
 
   twister:
     name: Twister (native_sim)
@@ -195,10 +170,7 @@ jobs:
 
       - name: Install the Zephyr Python requirements
         run: |
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-base.txt \
-            -r zephyr/scripts/requirements-build-test.txt \
-            -r zephyr/scripts/requirements-run-test.txt
+          rzi/tools/ci/install-deps.sh build
 
       - name: Run the test suites
         run: |
@@ -262,11 +234,7 @@ jobs:
 
       - name: Install the Zephyr Python requirements
         run: |
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-base.txt \
-            -r zephyr/scripts/requirements-build-test.txt \
-            -r zephyr/scripts/requirements-run-test.txt \
-            imgtool
+          rzi/tools/ci/install-deps.sh build
 
       - name: Set up the Zephyr SDK
         uses: ./rzi/.github/actions/setup-sdk
@@ -275,8 +243,10 @@ jobs:
 
       - name: Build the samples
         run: |
+          set -o pipefail
           west twister -T "${GITHUB_WORKSPACE}/rzi/samples" --inline-logs -v \
-            --integration --subset "${{ matrix.shard }}/4" -j "$(nproc)"
+            --integration --subset "${{ matrix.shard }}/4" -j "$(nproc)" \
+            2>&1 | tee sample-console.log
 
       - name: Upload the sample results
         if: always()
@@ -284,6 +254,7 @@ jobs:
         with:
           name: twister-samples-results-${{ matrix.shard }}
           path: |
+            sample-console.log
             twister-out/twister*.xml
             twister-out/twister.json
             twister-out/twister.log
@@ -325,11 +296,7 @@ jobs:
 
       - name: Install the Zephyr Python requirements
         run: |
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-base.txt \
-            -r zephyr/scripts/requirements-build-test.txt \
-            -r zephyr/scripts/requirements-run-test.txt \
-            imgtool "reuse==6.2.0"
+          rzi/tools/ci/install-deps.sh build
 
       - name: Set up the Zephyr SDK
         uses: ./rzi/.github/actions/setup-sdk
@@ -338,24 +305,39 @@ jobs:
 
       - name: Build a reference image with build metadata
         run: |
+          set -o pipefail
           west build -b rak4631/nrf52840/rzi --sysbuild rzi/samples/at -d build-sbom \
-            -- -DCONFIG_BUILD_OUTPUT_META=y -Dmcuboot_CONFIG_BUILD_OUTPUT_META=y
+            -- -DCONFIG_BUILD_OUTPUT_META=y -Dmcuboot_CONFIG_BUILD_OUTPUT_META=y \
+            2>&1 | tee firmware-build.log
 
       - name: Firmware SBOM (SPDX 3)
         run: |
-          python3 rzi/tools/sbom/generate-firmware-sbom.py build-sbom
-          for image in build-sbom/spdx/*/; do
-            args=()
-            for doc in "${image}"*.jsonld; do args+=(-j "${doc}"); done
-            spdx3-validate -q "${args[@]}"
-            python3 rzi/tools/sbom/check-sbom.py --strict --firmware "${image}"*.jsonld
-          done
+          rzi/tools/ci/check-firmware-sbom.sh build-sbom
 
       - name: Upload the firmware SBOM
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: firmware-sbom-at-rak4631_nrf52840_rzi
-          path: build-sbom/spdx/
+          path: |
+            build-sbom/spdx/
+            rzi/reports/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload firmware build diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: firmware-build-diagnostics
+          path: |
+            firmware-build.log
+            build-sbom/**/zephyr/.config
+            build-sbom/**/zephyr/zephyr.dts
+            build-sbom/**/CMakeCache.txt
+            build-sbom/**/build_info.yml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Preserve the existing required-check name for branch protection.
   samples:
@@ -402,10 +384,7 @@ jobs:
 
       - name: Install the Zephyr Python requirements
         run: |
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-base.txt \
-            -r zephyr/scripts/requirements-build-test.txt \
-            -r zephyr/scripts/requirements-run-test.txt
+          rzi/tools/ci/install-deps.sh build
 
       - name: Configure a reference build
         run: |
@@ -421,6 +400,18 @@ jobs:
 
       - name: Compile every public header as C and C++
         run: python3 rzi/tools/ci/check-public-headers.py build-headers
+
+      - name: Upload public-header diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: public-header-diagnostics
+          path: |
+            build-headers.log
+            build-headers/zephyr/.config
+            rzi/reports/
+          if-no-files-found: ignore
+          retention-days: 7
 
   doc:
     name: Documentation (Doxygen)
@@ -489,24 +480,22 @@ jobs:
 
       - name: Install the SBOM tools
         run: |
-          python3 -m pip install pyyaml "reuse==6.2.0" spdx3-validate \
-            "cyclonedx-python-lib[json-validation]"
+          rzi/tools/ci/install-deps.sh sbom
 
-      - name: Generate the module SBOM
+      - name: Generate and validate the module SBOM
         working-directory: rzi
-        run: tools/sbom/generate-sbom.sh
-
-      - name: Validate SPDX 3, CycloneDX 1.6, and the minimum elements
-        working-directory: rzi
-        run: |
-          spdx3-validate -q -j build/sbom/rzi.spdx.jsonld
-          python3 tools/sbom/check-sbom.py --strict build/sbom/rzi.spdx.jsonld build/sbom/rzi.cdx.json
+        run: tools/ci/check-module-sbom.sh
 
       - name: Upload the module SBOM
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ci-module-sbom
-          path: rzi/build/sbom/
+          path: |
+            rzi/build/sbom/
+            rzi/reports/
+          if-no-files-found: ignore
+          retention-days: 7
 
   required:
     name: CI required

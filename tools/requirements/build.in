@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless
+# SPDX-License-Identifier: Apache-2.0
+# Resolver input; installs use the generated hash-locked profiles instead.
+-r ../../../zephyr/scripts/requirements-base.txt
+-r ../../../zephyr/scripts/requirements-build-test.txt
+-r ../../../zephyr/scripts/requirements-run-test.txt
+west==1.5.0
+reuse==6.2.0
+spdx-python-model==0.0.6
+spdx3-validate==0.0.7
+imgtool==2.5.0
+cyclonedx-python-lib[json-validation]==11.12.0

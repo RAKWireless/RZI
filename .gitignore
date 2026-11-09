@@ -19,3 +19,7 @@
 
 # OS residual files
 .DS_Store
+
+# Local validation environments and reports
+/.venv-*/
+/reports/

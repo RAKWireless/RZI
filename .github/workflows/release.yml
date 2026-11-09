@@ -84,11 +84,7 @@ jobs:
 
       - name: Install the Zephyr Python requirements
         run: |
-          python3 -m pip install \
-            -r zephyr/scripts/requirements-base.txt \
-            -r zephyr/scripts/requirements-build-test.txt \
-            -r zephyr/scripts/requirements-run-test.txt \
-            imgtool "reuse==6.2.0"
+          rzi/tools/ci/install-deps.sh build
 
       - name: Set up the Zephyr SDK
         uses: ./rzi/.github/actions/setup-sdk
@@ -102,18 +98,14 @@ jobs:
 
       - name: Build with build metadata
         run: |
+          set -o pipefail
           west build -b "${{ matrix.board }}" --sysbuild "rzi/samples/${{ matrix.sample }}" \
-            -d build -- -DCONFIG_BUILD_OUTPUT_META=y -Dmcuboot_CONFIG_BUILD_OUTPUT_META=y
+            -d build -- -DCONFIG_BUILD_OUTPUT_META=y -Dmcuboot_CONFIG_BUILD_OUTPUT_META=y \
+            2>&1 | tee firmware-build.log
 
       - name: Generate and check the firmware SBOM
         run: |
-          python3 rzi/tools/sbom/generate-firmware-sbom.py build -o "dist/${IMAGE}/spdx"
-          for image in "dist/${IMAGE}"/spdx/*/; do
-            args=()
-            for doc in "${image}"*.jsonld; do args+=(-j "${doc}"); done
-            spdx3-validate -q "${args[@]}"
-            python3 rzi/tools/sbom/check-sbom.py --strict --firmware "${image}"*.jsonld
-          done
+          rzi/tools/ci/check-firmware-sbom.sh build "dist/${IMAGE}/spdx"
 
       - name: Collect the images
         run: |
@@ -134,6 +126,20 @@ jobs:
           name: ${{ env.IMAGE }}
           path: dist/${{ env.IMAGE }}.tar.gz
 
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: diagnostics-${{ strategy.job-index }}
+          path: |
+            firmware-build.log
+            dist/**/spdx/
+            rzi/reports/
+            build/**/zephyr/.config
+            build/**/CMakeCache.txt
+          if-no-files-found: ignore
+          retention-days: 7
+
   module:
     name: Module SBOM
     needs: [preflight, validation]
@@ -153,8 +159,7 @@ jobs:
 
       - name: Install the SBOM tools
         run: |
-          python3 -m pip install pyyaml "reuse==6.2.0" spdx3-validate \
-            "cyclonedx-python-lib[json-validation]"
+          rzi/tools/ci/install-deps.sh sbom
 
       - name: The tag matches the RZI version
         working-directory: rzi
@@ -168,15 +173,24 @@ jobs:
       - name: Generate and check the module SBOM
         working-directory: rzi
         run: |
-          tools/sbom/generate-sbom.sh
-          spdx3-validate -q -j build/sbom/rzi.spdx.jsonld
-          python3 tools/sbom/check-sbom.py --strict build/sbom/rzi.spdx.jsonld build/sbom/rzi.cdx.json
+          tools/ci/check-module-sbom.sh
 
       - name: Upload
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: module-sbom
           path: rzi/build/sbom/
+
+      - name: Upload module failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: module-sbom-diagnostics
+          path: |
+            rzi/build/sbom/
+            rzi/reports/
+          if-no-files-found: ignore
+          retention-days: 7
 
   publish:
     name: Prepare draft release

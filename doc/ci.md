@@ -103,9 +103,9 @@ that version changes.
 | Zephyr revision | `west.yml` | Together with `zephyr/patches/`; drop patches the new revision already contains |
 | `usp_zephyr` / `usp` revisions | `west.yml` | Together with `zephyr/patches/` |
 | `ZEPHYR_SDK_VERSION` | `ci.yml` env | Match the SDK required by the Zephyr revision |
-| `CLANG_FORMAT_VERSION` | `ci.yml` env | Same release developers run locally |
+| Compliance tools including clang-format | Pinned Zephyr `scripts/requirements-actions.txt` | Upgrade with Zephyr; install through the compliance profile |
 | `DOXYGEN_VERSION` | `ci.yml` env | Same release developers run locally |
-| REUSE 6.2.0 | SBOM installs in `ci.yml` and `release.yml` | Verify the pinned Zephyr scanner API before changing |
+| Build and SBOM Python tools | `tools/requirements/*.lock` | Resolve on Linux x86_64 / Python 3.12, review versions and hashes, then validate |
 
 `west.yml` is the only copy of the Zephyr and USP revisions; CI reads them
 from there.
@@ -153,12 +153,87 @@ simulator.
 
 ## Local reproduction
 
-Prerequisites match the runner: a Python environment with
-`zephyr/scripts/requirements-{base,build-test,run-test}.txt` installed,
-`device-tree-compiler`, `gperf`, and `gcc-multilib` / `g++-multilib` for the
-32-bit `native_sim/native` variant. Sample builds need the Zephyr SDK
-(`ZEPHYR_SDK_INSTALL_DIR`). Compliance also needs
-`zephyr/scripts/requirements-actions.txt` and `libmagic1`.
+Use Linux x86_64 with Python 3.12, matching the runner. Native prerequisites
+are `device-tree-compiler`, `gperf`, `gcc-multilib`, `g++-multilib`, and
+`libmagic1`; full checks also need the pinned Zephyr SDK. Install Node.js
+and run `npm --prefix ../zephyr/scripts/ci ci` for devicetree linting.
+Doxygen must match the version pinned in CI.
+
+### One preflight entry point
+
+Keep build/SBOM and compliance tools in separate virtual environments.
+Zephyr's hash-locked compliance dependencies use a different REUSE API than
+the firmware scanner. Installing the two profiles over each other would
+undo the dependency isolation.
+
+From the RZI repository root:
+
+```sh
+python3.12 -m venv ../.venv-build
+python3.12 -m venv ../.venv-compliance
+
+# Build, native tests, signing, and SPDX / CycloneDX validation.
+source ../.venv-build/bin/activate
+tools/ci/install-deps.sh build
+
+# Zephyr's own versioned, hash-locked compliance environment.
+PATH="$(cd ../.venv-compliance/bin && pwd):$PATH" tools/ci/install-deps.sh compliance
+
+# Fast gates, including the complete Zephyr compliance check, without firmware builds.
+python tools/ci/preflight.py --mode quick \
+    --compliance-python ../.venv-compliance/bin/python --range origin/main..HEAD
+
+# Before committing: validate only staged content in a disposable Git clone.
+# Unstaged and untracked files are neither included nor changed.
+python tools/ci/preflight.py --mode quick --staged \
+    --compliance-python ../.venv-compliance/bin/python
+
+# All local gates, plus native tests, public headers, samples, and firmware SBOM.
+# Requires a clean tracked tree and a configured west workspace.
+python tools/ci/preflight.py --mode full \
+    --compliance-python ../.venv-compliance/bin/python --range origin/main..HEAD
+```
+
+The quick mode runs actionlint, commit policy, tool tests, style, complete
+compliance, source/API/version rules, REUSE, Doxygen, and module SBOM checks.
+Full mode adds every integration sample in one Twister invocation rather
+than CI's four parallel shards. Neither mode installs packages silently.
+Logs and exit codes are saved under `reports/preflight/`, even when a check
+fails. Use `--list` to inspect the commands. Full mode does not provide
+hardware or radio validation.
+
+### Dependency updates
+
+`bootstrap.lock` is the minimal west workspace setup, `build.lock` includes
+Zephyr build/test tools, signing and SBOM tools, and `sbom.lock` is the
+module-SBOM subset. All pin versions and SHA-256 download hashes. CI and
+Release call `install-deps.sh`, the same installer used locally. Compliance
+uses the complete hash-locked file from the Zephyr revision in `west.yml`.
+
+To update build tools deliberately, resolve in a disposable Python 3.12
+Linux x86_64 environment, then regenerate all three profiles together:
+
+```sh
+python -m pip install --dry-run --ignore-installed \
+    -r tools/requirements/build.in --report /tmp/rzi-deps.json
+python tools/ci/lock-deps.py --report /tmp/rzi-deps.json
+```
+
+Review the resulting version/hash diff. Install into fresh environments,
+run preflight, and commit the locks together with any Zephyr revision
+change. Locks cover Python distributions; they do not lock system packages
+or every build-isolation backend for source distributions.
+
+### Failure evidence
+
+CI uploads partial firmware/module SBOMs and their generation, schema and
+minimum-element reports even if validation fails. Firmware/header build
+failures retain console output and configuration evidence. Sample shards
+retain their console logs and Twister reports; compliance retains the full
+console report. Release jobs upload separate failure diagnostics without
+publishing failed assets. Diagnostic artifacts expire after seven days.
+
+### Individual checks
 
 ```bash
 # clang-format, @file / @brief, and checkpatch

@@ -16,7 +16,7 @@ runs:
         path: ~/.cache/pip
         # All callers select Python 3.12. Dependencies are pinned by west.yml;
         # separate job keys let compliance and build tools populate their caches.
-        key: pip-v1-${{ runner.os }}-${{ runner.arch }}-py3.12-${{ github.job }}-${{ hashFiles('rzi/west.yml') }}
+        key: pip-v1-${{ runner.os }}-${{ runner.arch }}-py3.12-${{ github.job }}-${{ hashFiles('rzi/west.yml', 'rzi/tools/requirements/*.lock') }}
         restore-keys: |
           pip-v1-${{ runner.os }}-${{ runner.arch }}-py3.12-${{ github.job }}-
 
@@ -24,9 +24,7 @@ runs:
       shell: bash
       run: |
         set -eux
-        if ! python3 -m pip install --upgrade "west==1.5.0"; then
-          python3 -m pip install --upgrade --break-system-packages "west==1.5.0"
-        fi
+        rzi/tools/ci/install-deps.sh bootstrap
         echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
 
     - name: Cache the west workspace
