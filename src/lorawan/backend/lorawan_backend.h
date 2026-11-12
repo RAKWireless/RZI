@@ -61,6 +61,10 @@ enum rzi_lorawan_backend_fuota_kind {
 	RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE,
 	/** Firmware Management Package requested a reboot. */
 	RZI_LORAWAN_BACKEND_FUOTA_REBOOT_REQUESTED,
+	RZI_LORAWAN_BACKEND_FUOTA_PRECONFIG,
+	RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE,
+	RZI_LORAWAN_BACKEND_FUOTA_FRAGMENT_DELETED,
+	RZI_LORAWAN_BACKEND_FUOTA_CLEANUP_UPLINK_DONE,
 };
 
 /**
@@ -113,6 +117,10 @@ struct rzi_lorawan_backend_event {
 			bool successful;
 			/** Reconstructed image size in bytes, or zero if unknown. */
 			uint32_t image_size;
+			uint32_t generation;
+			struct rzi_fuota_session_info session;
+			enum rzi_fuota_time_source time_source;
+			uint8_t control; /* bit 0 status, bit 1 delete; local TX result only */
 		} fuota;
 		/** Link-check result for RZI_LORAWAN_BACKEND_LINK_CHECK. */
 		struct rzi_lorawan_link_check_result link_check;

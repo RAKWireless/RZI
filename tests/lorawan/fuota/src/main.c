@@ -19,6 +19,7 @@ K_SEM_DEFINE(ready_sem, 0, 1);
 struct fuota_stats {
 	atomic_t state;
 	atomic_t complete;
+	atomic_t ended;
 };
 
 static rzi_lorawan_event_sink_t fake_sink;
@@ -169,6 +170,14 @@ static void on_lorawan_event(const struct rzi_lorawan_event *event, void *user_d
 	}
 }
 
+static void on_session_ended(void *user_data)
+{
+	struct fuota_stats *stats = user_data;
+
+	atomic_inc(&stats->ended);
+	k_sem_give(&fuota_sem);
+}
+
 static void wait_for(unsigned int count)
 {
 	for (unsigned int i = 0; i < count; ++i) {
@@ -182,6 +191,7 @@ ZTEST(rzi_lorawan_fuota, test_session_and_image_access)
 	const struct rzi_fuota_callbacks fuota_callbacks = {
 		.state_changed = on_state_changed,
 		.complete = on_complete,
+		.session_ended = on_session_ended,
 		.user_data = &stats,
 	};
 	struct rzi_fuota_status status = {0};
@@ -200,6 +210,15 @@ ZTEST(rzi_lorawan_fuota, test_session_and_image_access)
 		.fuota.successful = true,
 	};
 
+	const struct rzi_fuota_callbacks ended_only = {
+		.session_ended = on_session_ended,
+		.user_data = &stats,
+	};
+	const struct rzi_lorawan_backend_event ended = {
+		.type = RZI_LORAWAN_BACKEND_FUOTA,
+		.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_SESSION_ENDED,
+	};
+	zassert_ok(rzi_fuota_register_callbacks(&ended_only));
 	zassert_ok(rzi_fuota_register_callbacks(&fuota_callbacks));
 	zassert_ok(rzi_lorawan_register_callbacks(&lorawan_callbacks));
 	zassert_ok(rzi_lorawan_init(RZI_LORAWAN_REGION_EU_868));
@@ -209,6 +228,15 @@ ZTEST(rzi_lorawan_fuota, test_session_and_image_access)
 	wait_for(1);
 	zassert_equal(atomic_get(&clock_sync_calls), 1);
 	zassert_equal(atomic_get(&stats.state), RZI_FUOTA_STATE_READY);
+	zassert_ok(rzi_fuota_get_status(&status));
+	zassert_equal(status.state, RZI_FUOTA_STATE_READY);
+	zassert_false(status.image_ready);
+
+	fake_sink(&started);
+	wait_for(1);
+	fake_sink(&ended);
+	wait_for(2);
+	zassert_equal(atomic_get(&stats.ended), 1);
 	zassert_ok(rzi_fuota_get_status(&status));
 	zassert_equal(status.state, RZI_FUOTA_STATE_READY);
 	zassert_false(status.image_ready);
@@ -225,6 +253,13 @@ ZTEST(rzi_lorawan_fuota, test_session_and_image_access)
 	zassert_equal(status.image_size, sizeof(fake_image));
 	zassert_ok(rzi_fuota_read_image(0, image, sizeof(image)));
 	zassert_mem_equal(image, fake_image, sizeof(fake_image));
+	zassert_equal(atomic_get(&stats.ended), 1);
+	fake_sink(&ended);
+	wait_for(1);
+	zassert_equal(atomic_get(&stats.ended), 2);
+	zassert_ok(rzi_fuota_get_status(&status));
+	zassert_equal(status.state, RZI_FUOTA_STATE_COMPLETE);
+	zassert_true(status.image_ready);
 	zassert_ok(rzi_lorawan_set_class(RZI_LORAWAN_CLASS_C));
 	zassert_equal(rzi_fuota_apply(), -RZI_ERR_NOT_SUPPORTED);
 	zassert_ok(rzi_lorawan_stop());

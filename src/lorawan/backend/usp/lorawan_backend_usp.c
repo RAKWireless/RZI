@@ -46,6 +46,10 @@ static rzi_lorawan_event_sink_t event_sink;
 static enum rzi_lorawan_class_b_state class_b_state = RZI_LORAWAN_CLASS_B_IDLE;
 #ifdef CONFIG_RZI_LORAWAN_FUOTA
 static bool fuota_image_ready;
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+static void usp_fuota_complete_cleanup_uplink(int error);
+static bool usp_fuota_is_holding_settings(void);
+#endif
 #endif
 
 static const smtc_modem_region_t regions[] = {
@@ -303,6 +307,9 @@ static void handle_event(const smtc_modem_event_t *source, int error)
 			break;
 		}
 		rzi_lorawan_usp_publish(&event);
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+		usp_fuota_complete_cleanup_uplink(event.error);
+#endif
 		break;
 	case SMTC_MODEM_EVENT_DOWNDATA:
 		publish_downlinks();
@@ -349,6 +356,7 @@ static void handle_event(const smtc_modem_event_t *source, int error)
 		if (event.error == 0) {
 			event.type = RZI_LORAWAN_BACKEND_FUOTA;
 			event.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_CLOCK_SYNCED;
+			event.fuota.time_source = RZI_FUOTA_TIME_MAC;
 			event.fuota.successful = true;
 			rzi_lorawan_usp_publish(&event);
 		}
@@ -374,9 +382,11 @@ static void handle_event(const smtc_modem_event_t *source, int error)
 	case SMTC_MODEM_EVENT_ALCSYNC_TIME:
 		event.type = RZI_LORAWAN_BACKEND_FUOTA;
 		event.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_CLOCK_SYNCED;
+		event.fuota.time_source = RZI_FUOTA_TIME_ALCSYNC;
 		event.fuota.successful = true;
 		rzi_lorawan_usp_publish(&event);
 		break;
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 	case SMTC_MODEM_EVENT_NEW_MULTICAST_SESSION_CLASS_C:
 	case SMTC_MODEM_EVENT_NEW_MULTICAST_SESSION_CLASS_B:
 		event.type = RZI_LORAWAN_BACKEND_FUOTA;
@@ -404,6 +414,7 @@ static void handle_event(const smtc_modem_event_t *source, int error)
 #endif
 		rzi_lorawan_usp_publish(&event);
 		break;
+#endif /* legacy uncorrelated package events */
 	case SMTC_MODEM_EVENT_FIRMWARE_MANAGEMENT:
 		if (source->event_data.fmp.status == SMTC_MODEM_EVENT_FMP_REBOOT_IMMEDIATELY) {
 			event.type = RZI_LORAWAN_BACKEND_FUOTA;
@@ -582,6 +593,11 @@ static int usp_set_class(enum rzi_lorawan_class device_class)
 	if (rc != 0) {
 		return rc;
 	}
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	if (usp_fuota_is_holding_settings()) {
+		return rzi_lorawan_usp_finish(-RZI_ERR_BUSY);
+	}
+#endif
 	switch (device_class) {
 	case RZI_LORAWAN_CLASS_A:
 		mapped = SMTC_MODEM_CLASS_A;
@@ -668,9 +684,15 @@ static int usp_fuota_start_clock_sync(void)
 	return rzi_lorawan_usp_finish(rc);
 }
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+static int usp_fuota_get_fragmented_image_size(size_t *size);
+static int usp_fuota_read_received_image(uint32_t offset, uint8_t *buffer, size_t size);
+#endif
 static int usp_fuota_get_image_size(size_t *size)
 {
-#ifdef CONFIG_LORA_BASICS_MODEM_FUOTA_V2
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	return usp_fuota_get_fragmented_image_size(size);
+#elif defined(CONFIG_LORA_BASICS_MODEM_FUOTA_V2)
 	uint32_t file_size = 0;
 
 	if (size == NULL) {
@@ -690,8 +712,12 @@ static int usp_fuota_get_image_size(size_t *size)
 
 static int usp_fuota_read_image(uint32_t offset, uint8_t *buffer, size_t size)
 {
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	return usp_fuota_read_received_image(offset, buffer, size);
+#else
 	smtc_modem_hal_context_restore(CONTEXT_FUOTA, offset, buffer, (uint32_t)size);
 	return 0;
+#endif
 }
 
 static int usp_fuota_reboot(void)
@@ -700,7 +726,19 @@ static int usp_fuota_reboot(void)
 	return 0;
 }
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+#include "lorawan_backend_usp_fuota.inc"
+#endif
+
 static const struct rzi_lorawan_fuota_ops usp_fuota_ops = {
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	.get_session_info = usp_fuota_get_session_info,
+	.close_multicast = usp_fuota_close_multicast,
+	.restore_settings = usp_fuota_restore_settings,
+	.cleanup_uplink = usp_fuota_request_keepalive,
+	.release_data = usp_fuota_release_data,
+	.business_blocked = usp_fuota_is_business_blocked,
+#endif
 	.start_clock_sync = usp_fuota_start_clock_sync,
 	.get_image_size = usp_fuota_get_image_size,
 	.read_image = usp_fuota_read_image,
@@ -747,6 +785,12 @@ static int usp_stop(void)
 	} else if (platform_acquired) {
 		rc = rzi_usp_result(smtc_modem_leave_network(STACK_ID));
 		if (rc == 0) {
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+			lorawan_fragmentation_release(STACK_ID);
+			usp_fuota_context_reserved = usp_fuota_fragment_configured =
+				fuota_image_ready = false;
+			atomic_clear(&usp_fuota_business_blocked);
+#endif
 			rzi_usp_set_event_handler(NULL);
 			event_sink = NULL;
 			ready = false;

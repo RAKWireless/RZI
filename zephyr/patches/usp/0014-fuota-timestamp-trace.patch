@@ -1,0 +1,159 @@
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+@@ -1,3 +1,9 @@
++/* Optional RZI diagnostics; other USP consumers have no dependency. */
++#if defined(CONFIG_RZI_LORAWAN_FUOTA_TRACE)
++#include <rzi/lorawan/fuota_trace.h>
++#else
++#define RZI_FUOTA_TRACE(e,a,b,c) do { } while (0)
++#endif
+ /**
+  * @file      lorawan_send_management.c
+  *
+@@ -175,6 +181,7 @@
+     lorawan_send_management_obj[stack_id].packet_type   = confirmed;
+ 
+     task_send.time_to_execute_s = smtc_modem_hal_get_time_in_s( ) + delay_s;
++    RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_SEND_QUEUED, f_port, task_send.time_to_execute_s, delay_s);
+     task_send.stack_id          = stack_id;
+     task_send.id                = SEND_TASK + ( NUMBER_OF_TASKS * stack_id );
+ 
+@@ -204,6 +211,7 @@
+         return;
+     }
+ #endif
++    RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_SEND_LAUNCH, lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport, smtc_modem_hal_get_time_in_ms(), 0);
+     send_status = tx_protocol_manager_request(
+         TX_PROTOCOL_TRANSMIT_LORA, lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport,
+         lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport_present,
+diff --git a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+--- a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
++++ b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+@@ -1,3 +1,9 @@
++/* Optional RZI diagnostics; other USP consumers have no dependency. */
++#if defined(CONFIG_RZI_LORAWAN_FUOTA_TRACE)
++#include <rzi/lorawan/fuota_trace.h>
++#else
++#define RZI_FUOTA_TRACE(e,a,b,c) do { } while (0)
++#endif
+ /*!
+  * \file      modem_tx_protocol_manager.c
+  *
+@@ -391,6 +397,7 @@
+                                               lr1mac_layer_param_t packet_type, uint32_t target_time_ms,
+                                               uint8_t stack_id )
+ {
++    RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_TPM_REQUEST, fport, target_time_ms, next_tpm_pending_request);
+     status_lorawan_t status = ERRORLORAWAN;
+     if( next_tpm_pending_request >= NB_REQUEST_ACCEPTED )
+     {
+@@ -407,6 +414,7 @@
+         next_tpm_packet_type[next_tpm_pending_request]               = packet_type;
+         next_tpm_stack_id[next_tpm_pending_request]                  = stack_id;
+         next_tpm_stand_alone_stack_request[next_tpm_pending_request] = false;
++        RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_TPM_QUEUED, fport, target_time_ms, next_tpm_pending_request);
+         next_tpm_pending_request++;
+         return OKLORAWAN;
+     }
+@@ -442,6 +450,7 @@
+         else
+         {
+             current_tpm_target_time_ms = target_time_ms + MODEM_TASK_DELAY_MS;
++            RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_TPM_TARGET, fport, current_tpm_target_time_ms, current_tpm_target_time_ms - target_time_ms);
+         }
+         if( tpm_get_next_channel( ) != OKLORAWAN )
+         {
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -1,3 +1,9 @@
++/* Optional RZI diagnostics; other USP consumers have no dependency. */
++#if defined(CONFIG_RZI_LORAWAN_FUOTA_TRACE)
++#include <rzi/lorawan/fuota_trace.h>
++#else
++#define RZI_FUOTA_TRACE(e,a,b,c) do { } while (0)
++#endif
+ /**
+  * @file      lorawan_fragmentation_package_v1.0.0.c
+  *
+@@ -295,14 +301,15 @@
+         ctx->inflight_control = ctx->pending_control;
+         ctx->inflight_generation = ctx->pending_generation;
+         ctx->pending_control = 0;
++        uint32_t trace_target_ms = smtc_modem_hal_get_time_in_ms() +
++            smtc_modem_hal_get_random_nb_in_range(0, ctx->fragmentation_ans_delay_s * 1000);
++        RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_FRAG_LAUNCH, ctx->inflight_control, trace_target_ms, ctx->fragmentation_ans_delay_s);
+         ctx->tx_accepted = tx_protocol_manager_request(
+             TX_PROTOCOL_TRANSMIT_LORA, FRAGMENTATION_PORT, true,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size,
+             UNCONF_DATA_UP,
+-            smtc_modem_hal_get_time_in_ms( ) +
+-                smtc_modem_hal_get_random_nb_in_range(
+-                    0, lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_ans_delay_s * 1000 ),
++            trace_target_ms,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].stack_id ) == OKLORAWAN;
+     }
+ }
+@@ -315,6 +322,7 @@
+             .generation = ctx->inflight_generation, .control = ctx->inflight_control,
+             .successful = ctx->tx_accepted && !tx_protocol_manager_tx_is_aborted(),
+         };
++        RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_CONTROL_DONE, info.control, info.successful, info.generation);
+         ctx->inflight_control = 0;
+         lorawan_fuota_observe(ctx->stack_id, LBM_FUOTA_CONTROL_SENT, &info);
+     }
+@@ -468,6 +476,7 @@
+         task.stack_id          = lorawan_fragmentation_package_ctx[service_id].stack_id;
+         task.priority          = TASK_MEDIUM_HIGH_PRIORITY;
+         task.time_to_execute_s = smtc_modem_hal_get_time_in_s( ) + smtc_modem_hal_get_random_nb_in_range( 0, 3 );
++        RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_FRAG_TASK, task.time_to_execute_s, lorawan_fragmentation_package_ctx[service_id].pending_control, smtc_modem_hal_get_time_in_ms());
+         if( modem_supervisor_add_task( &task ) != TASK_VALID )
+         {
+             SMTC_MODEM_HAL_PANIC( "Task not valid\n" );
+@@ -530,6 +539,7 @@
+         case FRAGMENTATION_SESSION_STATUS_REQ:
+         {
+             IS_VALID_PKG_CMD( FRAGMENTATION_SESSION_STATUS_REQ_SIZE );
++            RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_STATUS_REQ, fragmentation_package_rx_window, fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 1], stack_id);
+ 
+             uint8_t frag_index =
+                 ( fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 1] & 0x06 ) >> 1;
+@@ -564,6 +574,7 @@
+                     // Fetch the co-efficient value required to calculate delay of that respective session.
+                     ctx->fragmentation_ans_delay_s =
+                         1 << ( frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4 );
++                    RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_STATUS_READY, nb_frag_received, frag_session_data[frag_index].frag_decoder_status.MissingFrag, ctx->fragmentation_ans_delay_s);
+                 }
+             }
+             break;
+diff --git a/protocols/lbm_lib/smtc_modem_core/lr1mac/src/lr1_stack_mac_layer.c b/protocols/lbm_lib/smtc_modem_core/lr1mac/src/lr1_stack_mac_layer.c
+--- a/protocols/lbm_lib/smtc_modem_core/lr1mac/src/lr1_stack_mac_layer.c
++++ b/protocols/lbm_lib/smtc_modem_core/lr1mac/src/lr1_stack_mac_layer.c
+@@ -1,3 +1,9 @@
++/* Optional RZI diagnostics; other USP consumers have no dependency. */
++#if defined(CONFIG_RZI_LORAWAN_FUOTA_TRACE)
++#include <rzi/lorawan/fuota_trace.h>
++#else
++#define RZI_FUOTA_TRACE(e,a,b,c) do { } while (0)
++#endif
+ /*!
+  * \file      lr1_stack_mac_layer.c
+  *
+@@ -273,6 +279,7 @@
+     smtc_modem_hal_start_radio_tcxo( );
+     smtc_modem_hal_set_ant_switch( true );
+     SMTC_MODEM_HAL_PANIC_ON_FAILURE( ral_set_tx( &( rp->radio->ral ) ) == RAL_STATUS_OK );
++    RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_RADIO_TX_CALL, rp->radio_params[id].tx.lora.rf_freq_in_hz, rp->tasks[id].start_time_ms, rp->payload_buffer_size[id]);
+     rp_stats_set_tx_timestamp( &rp->stats, smtc_modem_hal_get_time_in_ms( ) );
+ }
+ 
+@@ -672,6 +679,7 @@
+     {
+     case RP_STATUS_TX_DONE:
+         lr1_mac->isr_tx_done_radio_timestamp = tcurrent_ms;  //@info Timestamp only on txdone it
++        RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_RADIO_TX_DONE, lr1_mac->tx_fport, lr1_mac->fcnt_up, tcurrent_ms);
+         break;
+ 
+     case RP_STATUS_RX_PACKET:

@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+tests:
+  rzi.lorawan.fuota_agent:
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    tags: [rzi, lorawan, fuota]

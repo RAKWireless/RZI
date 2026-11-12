@@ -14,6 +14,8 @@
 #include <stdint.h>
 
 #include <smtc_secure_element.h>
+#include <lr1mac_defs.h>
+#include <smtc_duty_cycle.h>
 
 /* smtc_modem_core/lorawan_api/lorawan_api.h */
 uint32_t lorawan_api_devaddr_get(uint8_t stack_id);
@@ -22,13 +24,7 @@ uint32_t lorawan_api_next_join_time_second_get(uint8_t stack_id);
 void lorawan_api_set_no_rx_packet_threshold(uint16_t no_rx_packet_reset_threshold,
 					    uint8_t stack_id);
 uint16_t lorawan_api_get_no_rx_packet_threshold(uint8_t stack_id);
-/* 0 is OTAA and 1 is ABP. int avoids redefining lr1mac_activation_mode_t. */
-void lorawan_api_set_activation_mode(int activation_mode, uint8_t stack_id);
-
-/* lr1mac/src/services/smtc_duty_cycle.h
- * 0 partial, 1 enabled, 2 fully disabled. int avoids redefining the LBM enum.
- */
-int smtc_duty_cycle_enable_get(void);
+void lorawan_api_set_activation_mode(lr1mac_activation_mode_t activation_mode, uint8_t stack_id);
 
 #ifdef CONFIG_LORA_BASICS_MODEM_FUOTA_V2
 /* lorawan_packages/fragmented_data_block_transport/lorawan_fragmentation_package.h */

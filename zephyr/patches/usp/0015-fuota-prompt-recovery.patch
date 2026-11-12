@@ -1,0 +1,92 @@
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -298,6 +298,8 @@
+     if( lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size > 0 )
+     {
+         lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[*(uint8_t*)service_id];
++        /* Only unicast status replies bypass application-level jitter. */
++        bool prompt_status = (ctx->pending_control & 1) && ctx->fragmentation_ans_delay_s == 0;
+         ctx->inflight_control = ctx->pending_control;
+         ctx->inflight_generation = ctx->pending_generation;
+         ctx->pending_control = 0;
+@@ -305,7 +307,8 @@
+             smtc_modem_hal_get_random_nb_in_range(0, ctx->fragmentation_ans_delay_s * 1000);
+         RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_FRAG_LAUNCH, ctx->inflight_control, trace_target_ms, ctx->fragmentation_ans_delay_s);
+         ctx->tx_accepted = tx_protocol_manager_request(
+-            TX_PROTOCOL_TRANSMIT_LORA, FRAGMENTATION_PORT, true,
++            prompt_status ? TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY : TX_PROTOCOL_TRANSMIT_LORA,
++            FRAGMENTATION_PORT, true,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size,
+             UNCONF_DATA_UP,
+@@ -474,8 +477,11 @@
+         smodem_task task       = { 0 };
+         task.id                = lorawan_fragmentation_package_ctx[service_id].task_id;
+         task.stack_id          = lorawan_fragmentation_package_ctx[service_id].stack_id;
+-        task.priority          = TASK_MEDIUM_HIGH_PRIORITY;
+-        task.time_to_execute_s = smtc_modem_hal_get_time_in_s( ) + smtc_modem_hal_get_random_nb_in_range( 0, 3 );
++        lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[service_id];
++        bool prompt_status = (ctx->pending_control & 1) && ctx->fragmentation_ans_delay_s == 0;
++        task.priority = prompt_status ? TASK_HIGH_PRIORITY : TASK_MEDIUM_HIGH_PRIORITY;
++        task.time_to_execute_s = smtc_modem_hal_get_time_in_s() +
++            (prompt_status ? 0 : smtc_modem_hal_get_random_nb_in_range(0, 3));
+         RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_FRAG_TASK, task.time_to_execute_s, lorawan_fragmentation_package_ctx[service_id].pending_control, smtc_modem_hal_get_time_in_ms());
+         if( modem_supervisor_add_task( &task ) != TASK_VALID )
+         {
+@@ -571,9 +577,13 @@
+ 
+                     ctx->pending_control |= 1;
+                     ctx->pending_generation = frag_session_data[frag_index].frag_group_data.generation;
+-                    // Fetch the co-efficient value required to calculate delay of that respective session.
++                    /* TS004 v1.0.0 section 3.2 defines BlockAckDelay for a
++                     * command sent using multicast; section 3.5 spreads those
++                     * group replies. A unicast query has only one recipient.
++                     */
+                     ctx->fragmentation_ans_delay_s =
+-                        1 << ( frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4 );
++                        is_received_on_multicast_window(fragmentation_package_rx_window) ?
++                        (1 << (frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4)) : 0;
+                     RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_STATUS_READY, nb_frag_received, frag_session_data[frag_index].frag_decoder_status.MissingFrag, ctx->fragmentation_ans_delay_s);
+                 }
+             }
+diff --git a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.h b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.h
+--- a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.h
++++ b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.h
+@@ -65,6 +65,10 @@
+     TX_PROTOCOL_TRANSMIT_LORA_AT_TIME       = 0x04,
+     TX_PROTOCOL_TRANSMIT_TEST_MODE          = 0x05,
+     TX_PROTOCOL_TRANSMIT_LORA_CERTIFICATION = 0x06,
++    /* Prompt unicast control reply: normal MAC/LBT/CSMA/relay processing,
++     * without the generic application-request random delay. Not an RF deadline.
++     */
++    TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY = 0x07,
+ } tx_protocol_manager_tx_type_t;
+ /*
+  * -----------------------------------------------------------------------------
+diff --git a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+--- a/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
++++ b/protocols/lbm_lib/smtc_modem_core/modem_supervisor/modem_tx_protocol_manager.c
+@@ -428,7 +428,11 @@
+     current_tpm_target_transmit_at_time     = 0;
+     if( request_type != TX_PROTOCOL_NONE )
+     {
+-        current_tpm_request_type     = request_type;
++        /* Keep the request type in the pending queue until replay, then
++         * normalize it to the ordinary LoRa MAC path (all RF gates remain).
++         */
++        current_tpm_request_type = request_type == TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY ?
++            TX_PROTOCOL_TRANSMIT_LORA : request_type;
+         current_tpm_fport            = fport;
+         current_tpm_transmit_at_time = false;
+         current_tpm_fport_enabled    = fport_enabled;
+@@ -449,7 +453,8 @@
+         }
+         else
+         {
+-            current_tpm_target_time_ms = target_time_ms + MODEM_TASK_DELAY_MS;
++            current_tpm_target_time_ms = target_time_ms +
++                (request_type == TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY ? 0 : MODEM_TASK_DELAY_MS);
+             RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_TPM_TARGET, fport, current_tpm_target_time_ms, current_tpm_target_time_ms - target_time_ms);
+         }
+         if( tpm_get_next_channel( ) != OKLORAWAN )

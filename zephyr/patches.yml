@@ -59,6 +59,88 @@ patches:
       tags; base64 is BSD-3-Clause, and the Gladman AES and Casado/Tsigas CMAC
       files get LicenseRef identifiers for the texts kept in LICENSES.txt.
 
+  - path: usp/0012-fuota-v1-agent-hooks.patch
+    sha256sum: 399d176a204fdec6e3fcf183eae88b9e828efbbdd1ccd3b1cf4b500b5a1cb816
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-05
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Add optional v1 package admission, generation metadata, multicast cancellation,
+      local control completion and checked storage hooks for the FUOTA receive agent.
+
+  - path: usp/0014-fuota-timestamp-trace.patch
+    sha256sum: 8fe540e89b4683662f736282258157b7d64175495ff0d33f598f56fbf1b7682c
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-06
+    upstreamable: false
+    apply-command: git apply
+    comments: |
+      Optional source-time trace of send scheduling, selected delays, status
+      request/answer and radio TX. Disabled unless RZI FUOTA trace is selected.
+
+  - path: usp/0015-fuota-prompt-recovery.patch
+    sha256sum: 7ad3450690cd8f108826ebbff747152914e025a26b408850d58bab40e9a7b3ab
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-06
+    upstreamable: false
+    apply-command: git apply
+    comments: |
+      Prompt unicast StatusAns with normal MAC gates; retain multicast
+      BlockAckDelay and generic traffic randomization. Applies after 0014.
+
+  - path: usp/0016-fuota-unicast-setup-retry.patch
+    sha256sum: dc887f6e770e94a0362e6d544f4774f72cc4513eba0b889517618516f9213f7f
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-10
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Prioritize unicast setup answers and re-ack matching active sessions
+      without resetting decoder progress or replacing an in-flight answer.
+
+  - path: usp/0017-fuota-preconfig-fragment-delete.patch
+    sha256sum: a129cf2052ad8ddd730c1f19a02c06b850cfd01b926df7588b07c58322033657
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-11
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Retire a preconfigured TS004 slot when its valid DeleteReq is accepted.
+
+  - path: usp/0018-fuota-class-c-session-answer.patch
+    sha256sum: 3c529c079fafac4c110d981cd593dc7d3f475e099d1b69d766d5aafd79cbcfba
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-11
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Encode TS005 v1 Class C session answers without RFU bits and
+      preserve existing windows on undefined groups or elapsed requests.
+
+  - path: usp/0020-fuota-fragment-reception-stats.patch
+    sha256sum: 0faf026fea57c936ddcaacfee3f50cb4a837cde5287a1543e5782a6dcd2ced0b
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-12
+    upstreamable: false
+    apply-command: git apply
+    comments: |
+      Snapshot unique TS004 fragment numbers and decoder/storage failures for managed reception.
+
   - path: usp_zephyr/0005-stm32wl-subghz-radio.patch
     sha256sum: 8dcaad970167a2a00daa0cbb05ea120b1d848a33705d1b8d778319010891ac75
     module: usp_zephyr
@@ -125,6 +207,18 @@ patches:
       Disabled Zephyr logging must not retain modem log strings or perform
       snprintf calls before discarding the output.
 
+  - path: usp_zephyr/0013-fuota-checked-storage.patch
+    sha256sum: 9043a5a4e260e2b40255e6b03ad1c55f59c4cc08a98ca88142d89dc435c7cbcb
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-05
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Expose checked FUOTA read/write capacity and sticky errors from the storage
+      provider, preserving modem context and existing partition ownership.
+
   - path: usp_zephyr/0013-gate-2g4-region-on-radio-support.patch
     sha256sum: dcb6e16c5ea2cceddd76308d7d11c64c762edcbaa2c14a54f43d29afd2b2d0d3
     module: usp_zephyr
@@ -137,6 +231,17 @@ patches:
       Only enable the WW_2G4 region for supported 2.4 GHz transceivers.
       The all-regions option retains every Sub-GHz region on STM32WL and
       SX126x boards without compiling the unsupported 2.4 GHz region.
+
+  - path: usp_zephyr/0019-fuota-context-flash-geometry.patch
+    sha256sum: 6ef1dae6449c63b5019935ccd0eb02e0410d0c3b7b5e86ae6692406423d29724
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-12
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Size the modem context scratch buffer for the partition's backing device.
 
   - path: zephyr/0009-stm32wl-locked-pm-resume.patch
     sha256sum: 22b3f283240da422119fcb8ccb2cd0f39f62f153073ec22a23086749eee19b92

@@ -1,0 +1,230 @@
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+index 17a8386..68f9bf0 100644
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+@@ -25,6 +25,8 @@ struct lbm_fuota_info {
+  */
+ bool lorawan_fuota_context_supported(uint8_t stack_id, uint8_t port, uint8_t index);
+ bool lorawan_fuota_storage_available(uint8_t stack_id);
++bool lorawan_multicast_answer_pending(uint8_t stack_id);
++bool lorawan_fragmentation_answer_pending(uint8_t stack_id);
+ bool lorawan_fuota_business_allowed(uint8_t stack_id);
+ bool lorawan_fuota_class_b_supported(uint8_t stack_id);
+ int lorawan_fuota_store(uint32_t offset, const uint8_t *buffer, size_t size);
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+index 2e9fd9f..948f535 100644
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -180,6 +180,10 @@ typedef struct lorawan_fragmentation_package_s
+     uint8_t pending_control, inflight_control;
+     uint32_t pending_generation, inflight_generation;
+     bool tx_accepted;
++    bool queued_setup;
++    bool accepted_setup_queued;
++    /* TPM may keep the pointer until this transaction completes. */
++    uint8_t transmitting[FRAG_SIZE_ANS_MAX];
+ } lorawan_fragmentation_package_ctx_t;
+ 
+ typedef struct frag_group_data_s
+@@ -299,21 +303,27 @@ void lorawan_fragmentation_package_service_on_launch( void* service_id )
+     {
+         lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[*(uint8_t*)service_id];
+         /* Only unicast status replies bypass application-level jitter. */
+-        bool prompt_status = (ctx->pending_control & 1) && ctx->fragmentation_ans_delay_s == 0;
++        bool prompt_status = (ctx->queued_setup || (ctx->pending_control & 1)) && ctx->fragmentation_ans_delay_s == 0;
+         ctx->inflight_control = ctx->pending_control;
+         ctx->inflight_generation = ctx->pending_generation;
+         ctx->pending_control = 0;
+         uint32_t trace_target_ms = smtc_modem_hal_get_time_in_ms() +
+             smtc_modem_hal_get_random_nb_in_range(0, ctx->fragmentation_ans_delay_s * 1000);
+         RZI_FUOTA_TRACE(RZI_FUOTA_TRACE_FRAG_LAUNCH, ctx->inflight_control, trace_target_ms, ctx->fragmentation_ans_delay_s);
++        memcpy(ctx->transmitting, ctx->fragmentation_tx_payload_ans,
++               ctx->fragmentation_tx_payload_ans_size);
+         ctx->tx_accepted = tx_protocol_manager_request(
+             prompt_status ? TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY : TX_PROTOCOL_TRANSMIT_LORA,
+             FRAGMENTATION_PORT, true,
+-            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans,
++            ctx->transmitting,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size,
+             UNCONF_DATA_UP,
+             trace_target_ms,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].stack_id ) == OKLORAWAN;
++        ctx->fragmentation_tx_payload_ans_size = 0;
++        ctx->fragmentation_ans_delay_s = 0;
++        ctx->accepted_setup_queued = false;
++        ctx->queued_setup = false;
+     }
+ }
+ 
+@@ -330,9 +340,9 @@ void lorawan_fragmentation_package_service_on_update( void* service_id )
+         lorawan_fuota_observe(ctx->stack_id, LBM_FUOTA_CONTROL_SENT, &info);
+     }
+     lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].is_pending_task = false;
+-    if( nb_transmit_ans > 1 )
++    if( ctx->fragmentation_tx_payload_ans_size > 0 || nb_transmit_ans > 1 )
+     {
+-        nb_transmit_ans--;
++        if( nb_transmit_ans > 1 ) { nb_transmit_ans--; }
+         lorawan_fragmentation_add_task( *( uint8_t* ) service_id );
+     }
+ }
+@@ -424,13 +434,15 @@ bool lorawan_fragmentation_package_service_mpa_injector( uint8_t stack_id, uint8
+     // check cmd id to find cmd_id length special case for data_fragment
+     if( cmd_id <= FRAGMENTATION_SESSION_DELETE_ANS )
+     {
++        /* MPA returns its bytes inline. Keep the direct-port reply queue intact. */
++        lorawan_fragmentation_package_ctx_t response = { .stack_id = stack_id };
+         frag_status_t frag_status =
+-            fragmentation_package_parser( ctx, payload_in, frag_req_cmd_size[cmd_id], rx_window, stack_id );
+-        if( ( frag_status == FRAG_STATUS_OK ) && ( ctx->fragmentation_tx_payload_ans_size > 0 ) )
++            fragmentation_package_parser( &response, payload_in, frag_req_cmd_size[cmd_id], rx_window, stack_id );
++        if( ( frag_status == FRAG_STATUS_OK ) && ( response.fragmentation_tx_payload_ans_size > 0 ) )
+         {
+-            SMTC_MODEM_HAL_PANIC_ON_FAILURE( ctx->fragmentation_tx_payload_ans_size <= max_payload_out_length );
+-            *payload_out_length = ctx->fragmentation_tx_payload_ans_size;
+-            memcpy( payload_out, ctx->fragmentation_tx_payload_ans, ctx->fragmentation_tx_payload_ans_size );
++            SMTC_MODEM_HAL_PANIC_ON_FAILURE( response.fragmentation_tx_payload_ans_size <= max_payload_out_length );
++            *payload_out_length = response.fragmentation_tx_payload_ans_size;
++            memcpy( payload_out, response.fragmentation_tx_payload_ans, response.fragmentation_tx_payload_ans_size );
+             return true;
+         }
+         else
+@@ -478,7 +490,7 @@ static void lorawan_fragmentation_add_task( uint8_t service_id )
+         task.id                = lorawan_fragmentation_package_ctx[service_id].task_id;
+         task.stack_id          = lorawan_fragmentation_package_ctx[service_id].stack_id;
+         lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[service_id];
+-        bool prompt_status = (ctx->pending_control & 1) && ctx->fragmentation_ans_delay_s == 0;
++        bool prompt_status = (ctx->queued_setup || (ctx->pending_control & 1)) && ctx->fragmentation_ans_delay_s == 0;
+         task.priority = prompt_status ? TASK_HIGH_PRIORITY : TASK_MEDIUM_HIGH_PRIORITY;
+         task.time_to_execute_s = smtc_modem_hal_get_time_in_s() +
+             (prompt_status ? 0 : smtc_modem_hal_get_random_nb_in_range(0, 3));
+@@ -504,13 +516,32 @@ static bool is_received_on_multicast_window( receive_win_t rx_window )
+     }
+ }
+ 
++/* Compare negotiated fields only. Decoder counters and storage contents are live. */
++static bool same_setup(const frag_group_data_t *active, const frag_group_data_t *request,
++                       uint32_t generation)
++{
++    return active->is_active && active->generation == generation &&
++           active->frag_session.frag_index == request->frag_session.frag_index &&
++           active->frag_session.mc_group_bit_mask == request->frag_session.mc_group_bit_mask &&
++           active->frag_nb == request->frag_nb && active->frag_size == request->frag_size &&
++           active->control.frag_algo == request->control.frag_algo &&
++           active->control.block_ack_delay == request->control.block_ack_delay &&
++           active->padding == request->padding && active->descriptor == request->descriptor;
++}
++
++bool lorawan_fragmentation_answer_pending(uint8_t stack_id)
++{
++    return stack_id < NUMBER_OF_FRAGMENTED_PACKAGE_OBJ &&
++           lorawan_fragmentation_package_ctx[stack_id].is_pending_task;
++}
++
+ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package_ctx_t* ctx,
+                                                    uint8_t*                             fragmentation_package_rx_buffer,
+                                                    uint8_t       fragmentation_package_rx_buffer_length,
+                                                    receive_win_t fragmentation_package_rx_window, uint8_t stack_id )
+ {
+     uint8_t fragmentation_package_rx_buffer_index = 0;
+-    if( nb_transmit_ans <= 1 )
++    if( !ctx->is_pending_task && nb_transmit_ans <= 1 )
+     {
+         ctx->fragmentation_tx_payload_ans_size = 0;
+         ctx->fragmentation_ans_delay_s         = 0;
+@@ -666,14 +697,18 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+                 // status |= 0x08; // Wrong Descriptor
+             }
+ 
+-            if ((status & 0x3F) == 0 && !lorawan_fuota_storage_available(stack_id)) {
++            const frag_group_data_t *requested = &frag_session_data_tmp.frag_group_data;
++            bool replay = (status & 0x3F) == 0 &&
++                same_setup(&frag_session_data[requested->frag_session.frag_index].frag_group_data,
++                           requested, lorawan_fuota_generation(stack_id));
++            if (!replay && (status & 0x3F) == 0 && !lorawan_fuota_storage_available(stack_id)) {
+                 status |= 0x02; /* retained block occupies the only decoder/storage */
+             }
+-            if ((status & 0x3F) == 0 && !lorawan_fuota_context_supported(
++            if (!replay && (status & 0x3F) == 0 && !lorawan_fuota_context_supported(
+                     stack_id, FRAGMENTATION_PORT, frag_session_data_tmp.frag_group_data.frag_session.frag_index)) {
+                 status |= 0x04; /* no supported fragmentation context in this mode */
+             }
+-            if( ( status & 0x3F ) == 0 )
++            if( !replay && ( status & 0x3F ) == 0 )
+             {
+                 frag_session_data_tmp.frag_group_data.generation = lorawan_fuota_generation(stack_id);
+                 frag_session_data_tmp.frag_group_data.is_active   = true;
+@@ -697,8 +732,14 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+                 };
+                 lorawan_fuota_observe(stack_id, LBM_FUOTA_FRAGMENT_SETUP, &info);
+             }
++            /* A pending success for the same active session already answers the retry. */
++            if (replay && ctx->accepted_setup_queued) {
++                break;
++            }
+             if( ( ans_index + FRAGMENTATION_SESSION_SETUP_ANS_SIZE ) <= max_payload_size )
+             {
++                ctx->queued_setup = true;
++                ctx->accepted_setup_queued |= (status & 0x3F) == 0;
+                 ctx->fragmentation_tx_payload_ans[ans_index++] = FRAGMENTATION_SESSION_SETUP_ANS;
+                 ctx->fragmentation_tx_payload_ans[ans_index++] = status;
+             }
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+index 5b8922c..77087ab 100644
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+@@ -195,6 +195,8 @@ typedef struct lorawan_remote_multicast_setup_package_s
+     // Uplink buffer ans
+     uint8_t  remote_multicast_tx_payload_ans[REMOTE_MULTICAST_SETUP_SIZE_ANS_MAX];
+     uint8_t  remote_multicast_tx_payload_ans_size;
++    uint8_t  transmitting[REMOTE_MULTICAST_SETUP_SIZE_ANS_MAX];
++    bool     answer_in_flight;
+     bool     request_time_sync;
+     bool     launch_class_c[NB_MULTICAST_GROUPS];
+     bool     launch_class_b[NB_MULTICAST_GROUPS];
+@@ -376,11 +378,13 @@ void lorawan_remote_multicast_setup_package_service_on_launch( void* ctx_service
+         SMTC_MODEM_HAL_TRACE_PRINTF( " lorawan_remote_multicast_setup_package launch ANS_CMD_TASK \n" );
+         SMTC_MODEM_HAL_TRACE_ARRAY( "ans = ", ctx->remote_multicast_tx_payload_ans,
+                                     ctx->remote_multicast_tx_payload_ans_size )
+-        tx_protocol_manager_request(
+-            TX_PROTOCOL_TRANSMIT_LORA, REMOTE_MULTICAST_SETUP_PORT, true, ctx->remote_multicast_tx_payload_ans,
++        memcpy(ctx->transmitting, ctx->remote_multicast_tx_payload_ans,
++               ctx->remote_multicast_tx_payload_ans_size);
++        ctx->answer_in_flight = tx_protocol_manager_request(
++            TX_PROTOCOL_TRANSMIT_LORA_NO_RANDOM_DELAY, REMOTE_MULTICAST_SETUP_PORT, true, ctx->transmitting,
+             ctx->remote_multicast_tx_payload_ans_size, UNCONF_DATA_UP,
+             smtc_modem_hal_get_time_in_ms( ) + smtc_modem_hal_get_random_nb_in_range( 0, ctx->fragmentation_ans_delay ),
+-            ctx->stack_id );
++            ctx->stack_id ) == OKLORAWAN;
+         ctx->remote_multicast_tx_payload_ans_size = 0;
+ 
+         ctx->task_ctx_mask &= ~( 1 << ANS_CMD_TASK );
+@@ -516,6 +520,7 @@ void lorawan_remote_multicast_setup_package_service_on_update( void* ctx_service
+ {
+     lorawan_remote_multicast_setup_package_ctx_t* ctx = ( lorawan_remote_multicast_setup_package_ctx_t* ) ctx_service;
+     uint8_t                                       stack_id = ctx->stack_id;
++    ctx->answer_in_flight = false;
+     // check if time is available
+     ctx->request_time_sync = true;
+     uint32_t gps_time_s;
+@@ -800,7 +805,7 @@ static void lorawan_remote_multicast_setup_add_task( lorawan_remote_multicast_se
+     smodem_task task = { 0 };
+     task.id          = ctx->task_id;
+     task.stack_id    = ctx->stack_id;
+-    task.priority    = TASK_MEDIUM_HIGH_PRIORITY;
++    task.priority = ctx->remote_multicast_tx_payload_ans_size ? TASK_HIGH_PRIORITY : TASK_MEDIUM_HIGH_PRIORITY;
+ 
+     uint32_t now = smtc_modem_hal_get_time_in_s( );
+ 
+@@ -1231,3 +1236,11 @@ void lorawan_remote_multicast_setup_cancel_class_c(uint8_t stack, uint8_t group)
+                                 (1UL << (STOP_CLASS_C_TASK_GROUP_ID_0 + group)));
+     }
+ }
++
++bool lorawan_multicast_answer_pending(uint8_t stack_id)
++{
++    uint8_t service_id;
++    lorawan_remote_multicast_setup_package_ctx_t *ctx =
++        lorawan_remote_multicast_setup_package_get_ctx_from_stack_id(stack_id, &service_id);
++    return ctx && (ctx->answer_in_flight || (ctx->task_ctx_mask & (1U << ANS_CMD_TASK)));
++}

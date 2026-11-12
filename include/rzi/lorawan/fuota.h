@@ -13,6 +13,7 @@
 #include <zephyr/toolchain.h>
 
 #include <rzi/err.h>
+#include <rzi/lorawan/fuota_agent.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -61,8 +62,9 @@ struct rzi_fuota_status {
 /**
  * @brief Asynchronous FUOTA callbacks.
  *
- * Callbacks execute in the LoRaWAN dispatcher thread. They must return
- * promptly and must not call @ref rzi_fuota_apply.
+ * Session callbacks execute in the LoRaWAN dispatcher thread, or on the
+ * receive worker when CONFIG_RZI_LORAWAN_FUOTA_AGENT is selected.
+ * Callbacks must return promptly and must not call @ref rzi_fuota_apply.
  *
  */
 struct rzi_fuota_callbacks {
@@ -74,6 +76,10 @@ struct rzi_fuota_callbacks {
 	void (*complete)(int status, void *user_data);
 	/** Opaque pointer passed to every callback. */
 	void *user_data;
+	/** Called after the multicast session ends. */
+	void (*session_ended)(void *user_data);
+	/** Managed receive event. Copy before returning from the Agent worker. */
+	void (*agent_event)(const struct rzi_fuota_event *event, void *user_data);
 };
 
 /**

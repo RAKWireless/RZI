@@ -1,0 +1,109 @@
+diff --git a/modules/smtc_modem_hal/smtc_modem_hal_storage.c b/modules/smtc_modem_hal/smtc_modem_hal_storage.c
+--- a/modules/smtc_modem_hal/smtc_modem_hal_storage.c
++++ b/modules/smtc_modem_hal/smtc_modem_hal_storage.c
+@@ -101,7 +101,7 @@
+     {
+         LOG_ERR( "Could not open flash area for context (%d)", err );
+     }
+-    LOG_INF( "Opened flash area - size %d bytes", context_flash_area->fa_size );
++    if (context_flash_area) { LOG_INF( "Opened flash area - size %d bytes", context_flash_area->fa_size ); }
+ }
+ 
+ static uint32_t priv_hal_context_address( const modem_context_type_t ctx_type, uint32_t offset )
+@@ -150,7 +150,7 @@
+ /* This API allows safe unaligned writes to multiple pages of flash.
+  */
+ 
+-static void flash_read_modify_write( uint32_t offset, const uint8_t* buffer, const uint32_t size )
++static int flash_read_modify_write( uint32_t offset, const uint8_t* buffer, const uint32_t size )
+ {
+     const struct device*    flash_device;
+     struct flash_pages_info info;
+@@ -165,11 +165,18 @@
+         memset( page_buffer, 0xFF, PAGE_BUFFER_SIZE );
+ 
+         /* Find out the page information in the flash */
+-        flash_get_page_info_by_offs( flash_device, context_flash_area->fa_off + offset + offset_in_data, &info );
++        int rc = flash_get_page_info_by_offs( flash_device, context_flash_area->fa_off + offset + offset_in_data, &info );
++        if (rc) { return rc; }
++        if (info.size != PAGE_BUFFER_SIZE || info.start_offset < context_flash_area->fa_off ||
++            info.start_offset - context_flash_area->fa_off > context_flash_area->fa_size ||
++            PAGE_BUFFER_SIZE > context_flash_area->fa_size - (info.start_offset - context_flash_area->fa_off)) {
++            return -EINVAL;
++        }
+         uint32_t page_offset_in_fa = info.start_offset - context_flash_area->fa_off;
+ 
+         /* Read the whole page */
+-        flash_area_read( context_flash_area, page_offset_in_fa, page_buffer, PAGE_BUFFER_SIZE );
++        rc = flash_area_read( context_flash_area, page_offset_in_fa, page_buffer, PAGE_BUFFER_SIZE );
++        if (rc) { return rc; }
+ 
+         /* Fill the data in the buffer */
+         uint32_t offset_in_page = offset + offset_in_data - page_offset_in_fa;
+@@ -178,14 +185,63 @@
+         memcpy( page_buffer + offset_in_page, buffer + offset_in_data, length );
+ 
+         /* Erase before write */
+-        flash_area_erase( context_flash_area, page_offset_in_fa, PAGE_BUFFER_SIZE );
++        rc = flash_area_erase( context_flash_area, page_offset_in_fa, PAGE_BUFFER_SIZE );
++        if (rc) { return rc; }
+ 
+         /* Write the whole page */
+-        flash_area_write( context_flash_area, page_offset_in_fa, page_buffer, PAGE_BUFFER_SIZE );
++        rc = flash_area_write( context_flash_area, page_offset_in_fa, page_buffer, PAGE_BUFFER_SIZE );
++        if (rc) { return rc; }
+         remaining -= length;
+ 
+     } while( remaining > 0 );
+-}
++    return 0;
++}
++
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++/* Provider-owned checked access. No new allocation, partition, or address map. */
++static int fuota_storage_error;
++static int fuota_range(uint32_t offset, size_t size)
++{
++    flash_init();
++    if (!context_flash_area) { return -ENODEV; }
++    if (context_flash_area->fa_size < ADDR_FUOTA_CONTEXT_OFFSET) { return -ENOSPC; }
++    size_t capacity = context_flash_area->fa_size - ADDR_FUOTA_CONTEXT_OFFSET;
++#ifdef ADD_SMTC_STORE_AND_FORWARD
++    capacity = MIN(capacity, ADDR_STORE_AND_FORWARD_CONTEXT_OFFSET - ADDR_FUOTA_CONTEXT_OFFSET);
++#endif
++    return offset <= capacity && size <= capacity - offset ? 0 : -EINVAL;
++}
++size_t lorawan_fuota_storage_capacity(void)
++{
++    flash_init();
++    if (!context_flash_area || context_flash_area->fa_size < ADDR_FUOTA_CONTEXT_OFFSET) { return 0; }
++    size_t capacity = context_flash_area->fa_size - ADDR_FUOTA_CONTEXT_OFFSET;
++#ifdef ADD_SMTC_STORE_AND_FORWARD
++    capacity = MIN(capacity, ADDR_STORE_AND_FORWARD_CONTEXT_OFFSET - ADDR_FUOTA_CONTEXT_OFFSET);
++#endif
++    return capacity;
++}
++int lorawan_fuota_storage_status(bool reset)
++{
++    int rc = fuota_storage_error;
++    if (reset) { fuota_storage_error = 0; }
++    return rc;
++}
++int lorawan_fuota_store(uint32_t offset, const uint8_t *buffer, size_t size)
++{
++    int rc = buffer && size ? fuota_range(offset, size) : -EINVAL;
++    if (!rc) { rc = flash_read_modify_write(ADDR_FUOTA_CONTEXT_OFFSET + offset, buffer, size); }
++    if (rc && !fuota_storage_error) { fuota_storage_error = rc; }
++    return rc;
++}
++int lorawan_fuota_read(uint32_t offset, uint8_t *buffer, size_t size)
++{
++    int rc = buffer && size ? fuota_range(offset, size) : -EINVAL;
++    if (!rc) { rc = flash_area_read(context_flash_area, ADDR_FUOTA_CONTEXT_OFFSET + offset, buffer, size); }
++    if (rc && !fuota_storage_error) { fuota_storage_error = rc; }
++    return rc;
++}
++#endif
+ 
+ void smtc_modem_hal_context_store( const modem_context_type_t ctx_type, uint32_t offset, const uint8_t* buffer,
+                                    const uint32_t size )

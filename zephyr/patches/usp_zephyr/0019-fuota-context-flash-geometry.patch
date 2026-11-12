@@ -1,0 +1,34 @@
+diff --git a/modules/smtc_modem_hal/smtc_modem_hal_storage.c b/modules/smtc_modem_hal/smtc_modem_hal_storage.c
+--- a/modules/smtc_modem_hal/smtc_modem_hal_storage.c
++++ b/modules/smtc_modem_hal/smtc_modem_hal_storage.c
+@@ -134,15 +134,20 @@
+     flash_area_read( context_flash_area, real_offset, buffer, size );
+ }
+ 
+-/* NOTE: We take here the maximum erase size out there to do read-erase-write */
+-// #define PAGE_BUFFER_SIZE 4096
+-#define PAGE_BUFFER_SIZE                                     \
+-    DT_PROP_OR( DT_CHOSEN( zephyr_flash ), erase_block_size, \
+-                4096 )  // Should match sector (page) size for each different architectures as 'zephyr, flash' is almost
+-                        // always used
+-
+-// For the min erase size in bytes, we use write_block_size property
+-// Defaults to 8 if not present
+-#define MIN_FLASH_WRITE_SIZE_BYTES DT_PROP_OR( DT_CHOSEN( zephyr_flash ), write_block_size, 8 )
++/* Match the backing device of the configured context partition. The
++ * SoC's chosen flash can differ when the context lives on SPI NOR.
++ */
++#if DT_HAS_CHOSEN(lora_basics_modem_context_partition)
++#define CONTEXT_PART_NODE DT_CHOSEN(lora_basics_modem_context_partition)
++#else
++#define CONTEXT_PART_NODE DT_NODELABEL(storage_partition)
++#endif
++#if DT_NODE_HAS_COMPAT(DT_MTD_FROM_FIXED_PARTITION(CONTEXT_PART_NODE), jedec_spi_nor)
++#define PAGE_BUFFER_SIZE CONFIG_SPI_NOR_FLASH_LAYOUT_PAGE_SIZE
++#define MIN_FLASH_WRITE_SIZE_BYTES 1
++#else
++#define PAGE_BUFFER_SIZE DT_PROP_OR(DT_CHOSEN(zephyr_flash), erase_block_size, 4096)
++#define MIN_FLASH_WRITE_SIZE_BYTES DT_PROP_OR(DT_CHOSEN(zephyr_flash), write_block_size, 8)
++#endif
+ 
+ static uint8_t page_buffer[PAGE_BUFFER_SIZE];

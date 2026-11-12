@@ -26,6 +26,8 @@ struct rzi_lorawan_service {
 	void (*on_deinit)(void);
 	/** Called for every backend event on the dispatcher thread. */
 	void (*on_event)(const struct rzi_lorawan_backend_event *event);
+	/** Nonblocking application TX/RX gate; true allows delivery. */
+	bool (*business_allowed)(void);
 };
 
 /**

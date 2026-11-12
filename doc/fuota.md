@@ -123,3 +123,7 @@ See `include/rzi/lorawan/fuota.h`:
 - `rzi_fuota_apply()`
 
 Reference sample: `samples/lorawan/fuota`.
+
+## FUOTA receive Agent
+
+The [FUOTA receive Agent design](fuota-agent.md) describes the USP v1 protocol flow, public interfaces and validation scope. The FUOTA service provides `rzi_fuota_apply()`.

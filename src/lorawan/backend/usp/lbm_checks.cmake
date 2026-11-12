@@ -4,6 +4,15 @@
 set(RZI_LBM_CORE_DIR ${ZEPHYR_USP_MODULE_DIR}/protocols/lbm_lib/smtc_modem_core)
 set(RZI_LBM_SE_DIR ${RZI_LBM_CORE_DIR}/smtc_modem_crypto/smtc_secure_element)
 zephyr_library_include_directories(${RZI_LBM_SE_DIR})
+zephyr_library_include_directories(${RZI_LBM_CORE_DIR}/lr1mac/src
+                                  ${RZI_LBM_CORE_DIR}/lr1mac/src/services
+                                  ${ZEPHYR_USP_MODULE_DIR}/smtc_rac_lib/smtc_ral/src)
+if(CONFIG_RZI_LORAWAN_FUOTA_AGENT)
+  zephyr_library_include_directories(${RZI_LBM_CORE_DIR}/lorawan_packages/fragmented_data_block_transport)
+  if(NOT EXISTS ${RZI_LBM_CORE_DIR}/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h)
+    message(FATAL_ERROR "The FUOTA receive agent requires the USP v1 FUOTA observer patch")
+  endif()
+endif()
 
 # lorawan_backend_usp_lbm.h repeats these prototypes; keep them in sync with LBM.
 function(rzi_check_lbm_prototype header regex)

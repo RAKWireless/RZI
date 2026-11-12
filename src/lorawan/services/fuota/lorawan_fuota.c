@@ -25,6 +25,12 @@
 #include "../../backend/lorawan_backend.h"
 #include "../../lorawan_service.h"
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+#include "fuota_agent_internal.h"
+/* Pins a ready generation across application callbacks, copy and reboot. */
+static bool data_in_use;
+#endif
+
 static __maybe_unused void ignore_result(int result)
 {
 	ARG_UNUSED(result);
@@ -56,7 +62,7 @@ static int last_error;
 static struct rzi_fuota_callbacks callbacks;
 static const struct rzi_lorawan_fuota_ops *ops;
 
-#if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0
+#if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0 && !defined(CONFIG_RZI_LORAWAN_FUOTA_AGENT)
 static void keepalive_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(keepalive_work, keepalive_work_handler);
 #endif
@@ -64,7 +70,11 @@ static K_WORK_DELAYABLE_DEFINE(keepalive_work, keepalive_work_handler);
 static bool callbacks_empty(const struct rzi_fuota_callbacks *table)
 {
 	return table->state_changed == NULL && table->session_started == NULL &&
-	       table->complete == NULL;
+	       table->session_ended == NULL && table->complete == NULL
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	       && table->agent_event == NULL
+#endif
+		;
 }
 
 static const struct rzi_lorawan_fuota_ops *resolve_ops(void)
@@ -122,13 +132,25 @@ static void notify_session_started(void)
 	k_mutex_lock(&lock, K_FOREVER);
 }
 
-#if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0
-static void schedule_keepalive(void)
+static void notify_session_ended(void)
+{
+	struct rzi_fuota_callbacks table = callbacks;
+
+	k_mutex_unlock(&lock);
+	if (table.session_ended != NULL) {
+		table.session_ended(table.user_data);
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+}
+
+
+#if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0 && !defined(CONFIG_RZI_LORAWAN_FUOTA_AGENT)
+static __maybe_unused void schedule_keepalive(void)
 {
 	k_work_schedule(&keepalive_work, K_SECONDS(CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S));
 }
 
-static void cancel_keepalive(void)
+static __maybe_unused void cancel_keepalive(void)
 {
 	(void)k_work_cancel_delayable(&keepalive_work);
 }
@@ -158,11 +180,11 @@ static void keepalive_work_handler(struct k_work *work)
 	schedule_keepalive();
 }
 #else
-static void schedule_keepalive(void)
+static __maybe_unused void schedule_keepalive(void)
 {
 }
 
-static void cancel_keepalive(void)
+static __maybe_unused void cancel_keepalive(void)
 {
 }
 
@@ -171,6 +193,7 @@ static void cancel_keepalive_sync(void)
 }
 #endif
 
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 static void log_image_head(void)
 {
 	uint8_t prefix[IMAGE_HEAD_LOG];
@@ -242,6 +265,8 @@ static int detect_image_size(size_t reported)
 	return 0;
 }
 
+#endif
+
 #ifdef CONFIG_IMG_MANAGER
 static int copy_image_to_slot(void)
 {
@@ -277,6 +302,7 @@ static int copy_image_to_slot(void)
 }
 #endif
 
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 static void handle_joined(void)
 {
 	int rc = 0;
@@ -311,6 +337,7 @@ static void handle_fuota_event(const struct rzi_lorawan_backend_event *event)
 			schedule_keepalive();
 			set_state_locked(RZI_FUOTA_STATE_READY);
 		}
+		notify_session_ended();
 		break;
 	case RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE:
 		if (event->fuota.successful) {
@@ -339,8 +366,56 @@ static void handle_fuota_event(const struct rzi_lorawan_backend_event *event)
 			LOG_INF("FMP reboot requested; call rzi_fuota_apply()");
 		}
 		break;
+	case RZI_LORAWAN_BACKEND_FUOTA_PRECONFIG:
+	case RZI_LORAWAN_BACKEND_FUOTA_FRAGMENT_DELETED:
+	case RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE:
+	case RZI_LORAWAN_BACKEND_FUOTA_CLEANUP_UPLINK_DONE:
+		break;
 	}
 }
+
+#else
+static void notify_agent_event(const struct rzi_fuota_event *event)
+{
+	struct rzi_fuota_callbacks table = callbacks;
+
+	k_mutex_unlock(&lock);
+	if (table.agent_event != NULL) {
+		table.agent_event(event, table.user_data);
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+}
+
+void fuota_service_on_agent_notice(const struct fuota_agent_notice *notice)
+{
+	k_mutex_lock(&lock, K_FOREVER);
+	switch (notice->kind) {
+	case FUOTA_AGENT_NOTICE_STATE_CHANGED:
+		image_ready = notice->state.data.ready;
+		image_size = notice->state.data.length_valid ? notice->state.data.length : 0;
+		if (notice->state.next == RZI_FUOTA_STATE_READY) {
+			last_error = 0;
+		}
+		set_state_locked(notice->state.next);
+		break;
+	case FUOTA_AGENT_NOTICE_SESSION_STARTED:
+		notify_session_started();
+		break;
+	case FUOTA_AGENT_NOTICE_TRANSFER_RESULT:
+		last_error = notice->transfer_result;
+		notify_complete(notice->transfer_result);
+		break;
+	case FUOTA_AGENT_NOTICE_EVENT:
+		notify_agent_event(notice->event);
+		if (notice->event->type == RZI_FUOTA_EVENT_CLOSED) {
+			/* CLOSED may have registered a new listener for session_ended. */
+			notify_session_ended();
+		}
+		break;
+	}
+	k_mutex_unlock(&lock);
+}
+#endif
 
 int rzi_fuota_register_callbacks(const struct rzi_fuota_callbacks *table)
 {
@@ -373,6 +448,13 @@ int rzi_fuota_init(void)
 		k_mutex_unlock(&lock);
 		return -RZI_ERR_NOT_SUPPORTED;
 	}
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	int rc = fuota_agent_init();
+	if (rc != 0) {
+		k_mutex_unlock(&lock);
+		return rc;
+	}
+#endif
 	atomic_set(&active, 1);
 	k_mutex_unlock(&lock);
 	LOG_INF("FUOTA coordination initialized");
@@ -408,9 +490,13 @@ int rzi_fuota_set_expected_size(size_t size)
 
 	k_mutex_lock(&lock, K_FOREVER);
 	expected_size = size;
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	(void)fuota_agent_set_expected_size(size);
+#else
 	if (image_ready && image_size == 0U) {
 		image_size = size;
 	}
+#endif
 	k_mutex_unlock(&lock);
 	return 0;
 }
@@ -429,7 +515,16 @@ int rzi_fuota_read_image(size_t offset, void *buffer, size_t size)
 	k_mutex_lock(&lock, K_FOREVER);
 	if (!image_ready) {
 		rc = -RZI_ERR_NOT_FOUND;
-	} else if (ops == NULL || ops->read_image == NULL) {
+	}
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	else if (!image_size) {
+		rc = -RZI_ERR_NO_DATA;
+	}
+	else if (offset > image_size || size > image_size - offset) {
+		rc = -RZI_ERR_INVALID;
+	}
+#endif
+	else if (ops == NULL || ops->read_image == NULL) {
 		rc = -RZI_ERR_NOT_SUPPORTED;
 	} else {
 		rc = ops->read_image((uint32_t)offset, buffer, size);
@@ -438,7 +533,7 @@ int rzi_fuota_read_image(size_t offset, void *buffer, size_t size)
 	return rc;
 }
 
-int rzi_fuota_apply(void)
+static int install_ready_image(void)
 {
 	if (k_is_in_isr()) {
 		return -RZI_ERR_ISR;
@@ -480,12 +575,85 @@ int rzi_fuota_apply(void)
 #endif
 }
 
+int rzi_fuota_apply(void)
+{
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	struct rzi_fuota_snapshot current;
+	if (k_is_in_isr()) {
+		return -RZI_ERR_ISR;
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+	if (data_in_use) {
+		k_mutex_unlock(&lock);
+		return -RZI_ERR_BUSY;
+	}
+	data_in_use = true;
+	k_mutex_unlock(&lock);
+	int rc = rzi_fuota_get_snapshot(&current);
+	if (rc == 0) {
+		rc = current.data.ready && current.phase != RZI_FUOTA_READY ? -RZI_ERR_BUSY
+									    : install_ready_image();
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+	data_in_use = false;
+	k_mutex_unlock(&lock);
+	return rc;
+#else
+	return install_ready_image();
+#endif
+}
+
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+int rzi_fuota_release_data(uint32_t generation)
+{
+	if (k_is_in_isr()) {
+		return -RZI_ERR_ISR;
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+	if (data_in_use) {
+		k_mutex_unlock(&lock);
+		return -RZI_ERR_BUSY;
+	}
+	data_in_use = true;
+	k_mutex_unlock(&lock);
+	int rc = fuota_agent_release_data(generation);
+	k_mutex_lock(&lock, K_FOREVER);
+	data_in_use = false;
+	k_mutex_unlock(&lock);
+	return rc;
+}
+#else
+int rzi_fuota_get_snapshot(struct rzi_fuota_snapshot *out)
+{
+	ARG_UNUSED(out);
+	return k_is_in_isr() ? -RZI_ERR_ISR : -RZI_ERR_NOT_SUPPORTED;
+}
+int rzi_fuota_get_session_info(struct rzi_fuota_session_info *out)
+{
+	ARG_UNUSED(out);
+	return k_is_in_isr() ? -RZI_ERR_ISR : -RZI_ERR_NOT_SUPPORTED;
+}
+int rzi_fuota_get_data_info(struct rzi_fuota_data_info *out)
+{
+	ARG_UNUSED(out);
+	return k_is_in_isr() ? -RZI_ERR_ISR : -RZI_ERR_NOT_SUPPORTED;
+}
+int rzi_fuota_release_data(uint32_t generation)
+{
+	ARG_UNUSED(generation);
+	return k_is_in_isr() ? -RZI_ERR_ISR : -RZI_ERR_NOT_SUPPORTED;
+}
+#endif
+
 static void fuota_on_event(const struct rzi_lorawan_backend_event *event)
 {
 	if (event == NULL || !atomic_get(&active)) {
 		return;
 	}
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	fuota_agent_on_event(event);
+#else
 	k_mutex_lock(&lock, K_FOREVER);
 	switch (event->type) {
 	case RZI_LORAWAN_BACKEND_JOINED:
@@ -510,6 +678,7 @@ static void fuota_on_event(const struct rzi_lorawan_backend_event *event)
 		break;
 	}
 	k_mutex_unlock(&lock);
+#endif
 }
 
 static void fuota_on_initialized(void)
@@ -520,7 +689,11 @@ static void fuota_on_initialized(void)
 static int fuota_on_stopping(void)
 {
 	k_mutex_lock(&lock, K_FOREVER);
-	if (state == RZI_FUOTA_STATE_APPLYING) {
+	if (state == RZI_FUOTA_STATE_APPLYING
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	    || data_in_use || !fuota_agent_can_stop()
+#endif
+	) {
 		k_mutex_unlock(&lock);
 		return -RZI_ERR_BUSY;
 	}
@@ -531,6 +704,9 @@ static int fuota_on_stopping(void)
 static void fuota_on_stopped(void)
 {
 	atomic_clear(&active);
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	fuota_agent_stopped();
+#endif
 	cancel_keepalive_sync();
 	k_mutex_lock(&lock, K_FOREVER);
 #if defined(CONFIG_RZI_POWER)
@@ -562,6 +738,9 @@ static int fuota_register(void)
 		.on_stopped = fuota_on_stopped,
 		.on_deinit = fuota_on_deinit,
 		.on_event = fuota_on_event,
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+		.business_allowed = fuota_agent_business_allowed,
+#endif
 	};
 
 	return rzi_lorawan_register_service(&service);

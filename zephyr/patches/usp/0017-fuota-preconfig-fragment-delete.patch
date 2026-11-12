@@ -1,0 +1,38 @@
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+@@ -24,6 +24,9 @@
+  * -> standard not-enough-memory. Never put a product error in RFU bits.
+  */
+ bool lorawan_fuota_context_supported(uint8_t stack_id, uint8_t port, uint8_t index);
++/* True when the owner retired the preconfigured fragment at request acceptance.
++ * In that case the subsequent answer must not finalize a replacement session. */
++bool lorawan_fuota_delete_preconfigured_fragment(uint8_t stack_id, uint32_t generation);
+ bool lorawan_fuota_storage_available(uint8_t stack_id);
+ bool lorawan_multicast_answer_pending(uint8_t stack_id);
+ bool lorawan_fragmentation_answer_pending(uint8_t stack_id);
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -768,8 +768,11 @@
+             {
+                 // Delete session
+                 frag_session_data[id].frag_group_data.is_active = false;
+-                ctx->pending_control |= 2;
+-                ctx->pending_generation = frag_session_data[id].frag_group_data.generation;
++                uint32_t generation = frag_session_data[id].frag_group_data.generation;
++                if (!lorawan_fuota_delete_preconfigured_fragment(stack_id, generation)) {
++                    ctx->pending_control |= 2;
++                    ctx->pending_generation = generation;
++                }
+             }
+             if( ( ans_index + FRAGMENTATION_SESSION_DELETE_ANS_SIZE ) <= max_payload_size )
+             {
+@@ -956,6 +959,9 @@
+     }
+ }
+ 
++__attribute__((weak)) bool lorawan_fuota_delete_preconfigured_fragment(uint8_t stack, uint32_t generation)
++{ (void)stack; (void)generation; return false; }
++
+ __attribute__((weak)) bool lorawan_fuota_business_allowed(uint8_t stack)
+ { (void)stack; return true; }
+ 

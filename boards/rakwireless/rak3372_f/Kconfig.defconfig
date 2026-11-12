@@ -13,6 +13,13 @@ config IDLE_STACK_SIZE
 	default 2048
 endif
 
+# The MX25 has 4 KiB erase sectors. Both 8 KiB settings and modem
+# context partitions need a page layout wholly inside their own bounds.
+if SPI_NOR && FLASH_PAGE_LAYOUT
+config SPI_NOR_FLASH_LAYOUT_PAGE_SIZE
+	default 4096
+endif
+
 config ARCH_HAS_CUSTOM_BUSY_WAIT
 	default y
 

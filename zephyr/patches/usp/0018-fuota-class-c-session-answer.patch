@@ -1,0 +1,155 @@
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+@@ -1008,30 +1008,35 @@
+         case REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ:
+         {
+             IS_VALID_PKG_CMD( REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ_SIZE );
+-            if (!lorawan_fuota_context_supported(stack_id, REMOTE_MULTICAST_SETUP_PORT,
+-                    rx_buffer[rx_buffer_index + 1] & 0x03)) {
+-                return REMOTE_MULTICAST_SETUP_STATUS_ERROR;
+-            }
+-            uint8_t mc_grp_id = rx_buffer[rx_buffer_index + 1] & 0x03;
+-            ctx->generation[mc_grp_id] = lorawan_fuota_generation(stack_id);
+-
+-            // Check if group id is in supported range
+-            if( mc_grp_id < NB_MULTICAST_GROUPS )
+-            {
+-                multicast_session_params_t saved_params = multicast_group_params[mc_grp_id].params;
+-                multicast_group_params[mc_grp_id].params.session_time =
+-                    rx_buffer[rx_buffer_index + 2] + ( rx_buffer[rx_buffer_index + 3] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 5] << 24 );
+-                multicast_group_params[mc_grp_id].params.time_out = ( 1 << ( rx_buffer[rx_buffer_index + 6] & 0x0F ) );
+-                multicast_group_params[mc_grp_id].params.frequency =
+-                    lorawan_api_decode_freq_from_24bits_buf( ctx->stack_id, &rx_buffer[rx_buffer_index + 7] );
+-                multicast_group_params[mc_grp_id].params.dr = rx_buffer[rx_buffer_index + 10] & 0x0F;
+-                SMTC_MODEM_HAL_TRACE_PRINTF(
+-                    "multicast_group_params %d ;%d ;%d ;%d \n", multicast_group_params[mc_grp_id].params.session_time,
+-                    multicast_group_params[mc_grp_id].params.time_out,
+-                    multicast_group_params[mc_grp_id].params.frequency, multicast_group_params[mc_grp_id].params.dr );
+-                // find gps epoch time source
+-                // try network clk sync package
++            const uint8_t* req = &rx_buffer[rx_buffer_index];
++            const uint8_t mc_grp_id = req[1] & 0x03;
++            const uint32_t frequency = lorawan_api_decode_freq_from_24bits_buf( stack_id, &rx_buffer[rx_buffer_index + 7] );
++            const uint8_t dr = req[10] & 0x0F;
++            uint8_t status = mc_grp_id;
++
++            if( mc_grp_id >= NB_MULTICAST_GROUPS || !multicast_group_params[mc_grp_id].active )
++            {
++                status |= 1 << 4;
++            }
++            if( lorawan_api_is_frequency_valid( stack_id, frequency ) == ERRORLORAWAN )
++            {
++                status |= 1 << 3;
++            }
++            if( lorawan_api_is_datarate_valid( stack_id, dr ) == ERRORLORAWAN )
++            {
++                status |= 1 << 2;
++            }
++            const uint8_t ans_size = ( status == mc_grp_id ) ? REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS_SIZE
++                                                            : REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS_ERROR_SIZE;
++            if( ans_index + ans_size > max_payload_size )
++            {
++                rx_buffer_index += REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ_SIZE;
++                break;
++            }
++            if( status == mc_grp_id )
++            {
++                const uint32_t session_time = req[2] | ( (uint32_t)req[3] << 8 ) | ( (uint32_t)req[4] << 16 ) |
++                                              ( (uint32_t)req[5] << 24 );
+                 uint32_t seconds_since_epoch = 0;
+                 uint32_t fractional_second;
+                 // try network clk sync
+@@ -1049,61 +1054,43 @@
+                             ? gps_time_s_tmp
+                             : 0;
+                 }
+-                // checks parameters
+-                uint8_t mc_grp_id_status = mc_grp_id;
+-                mc_grp_id_status |=
+-                    ( seconds_since_epoch >= multicast_group_params[mc_grp_id].params.session_time ) ? ( 1 << 5 ) : 0;
+-                mc_grp_id_status |= ( multicast_group_params[mc_grp_id].active == false ) ? ( 1 << 4 ) : 0;
+-                mc_grp_id_status |=
+-                    ( lorawan_api_is_frequency_valid( stack_id, multicast_group_params[mc_grp_id].params.frequency ) ==
+-                      ERRORLORAWAN )
+-                        ? ( 1 << 3 )
+-                        : 0;
+-                mc_grp_id_status |= ( lorawan_api_is_datarate_valid(
+-                                          stack_id, multicast_group_params[mc_grp_id].params.dr ) == ERRORLORAWAN )
+-                                        ? ( 1 << 2 )
+-                                        : 0;
+-
+-                if (mc_grp_id_status != mc_grp_id) {
+-                    multicast_group_params[mc_grp_id].params = saved_params;
++                /* TS005 v1 has no time-error bit. Report zero time remaining for
++                 * a start that has elapsed, without replacing a scheduled window. */
++                uint32_t time_to_start = session_time > seconds_since_epoch ? session_time - seconds_since_epoch : 0;
++                if( time_to_start > 0 )
++                {
++                    if( !lorawan_fuota_context_supported( stack_id, REMOTE_MULTICAST_SETUP_PORT, mc_grp_id ) )
++                    {
++                        return REMOTE_MULTICAST_SETUP_STATUS_ERROR;
++                    }
++                    multicast_session_params_t* params = &multicast_group_params[mc_grp_id].params;
++                    params->session_time = session_time;
++                    params->time_out = 1U << ( req[6] & 0x0F );
++                    params->frequency = frequency;
++                    params->dr = dr;
++                    ctx->generation[mc_grp_id] = lorawan_fuota_generation( stack_id );
++                    ctx->launch_class_c[mc_grp_id] = true;
++                    const struct lbm_fuota_info info = {
++                        .generation = ctx->generation[mc_grp_id], .index = mc_grp_id,
++                        .session_time = session_time, .timeout_s = params->time_out,
++                        .frequency = frequency, .data_rate = dr,
++                    };
++                    lorawan_fuota_observe( stack_id, LBM_FUOTA_WINDOW_SETUP, &info );
+                 }
+-                if( ( ans_index + REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS_SIZE ) <= max_payload_size )
++                if( time_to_start > 0xFFFFFFU )
+                 {
+-                    ctx->remote_multicast_tx_payload_ans[ans_index++] =
+-                        REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS;
+-                    ctx->remote_multicast_tx_payload_ans[ans_index++] = mc_grp_id_status;
+-
+-                    if( mc_grp_id_status == mc_grp_id )  // no error
+-                    {
+-                        uint32_t time_to_start =
+-                            multicast_group_params[mc_grp_id].params.session_time - seconds_since_epoch;
+-                        if( time_to_start >= ( 1 << 24 ) )
+-                        {
+-                            time_to_start = 0xFFFFFF;
+-                        }
+-                        ctx->remote_multicast_tx_payload_ans[ans_index++] = time_to_start & 0xFF;
+-                        ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 8 ) & 0xFF;
+-                        ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 16 ) & 0xFF;
+-                        ctx->launch_class_c[mc_grp_id]                    = true;
+-                        const struct lbm_fuota_info info = {
+-                            .generation = ctx->generation[mc_grp_id], .index = mc_grp_id,
+-                            .session_time = multicast_group_params[mc_grp_id].params.session_time,
+-                            .timeout_s = multicast_group_params[mc_grp_id].params.time_out,
+-                            .frequency = multicast_group_params[mc_grp_id].params.frequency,
+-                            .data_rate = multicast_group_params[mc_grp_id].params.dr,
+-                        };
+-                        lorawan_fuota_observe(stack_id, LBM_FUOTA_WINDOW_SETUP, &info);
+-                    }
++                    time_to_start = 0xFFFFFFU;
+                 }
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS;
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = status;
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = time_to_start & 0xFF;
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 8 ) & 0xFF;
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 16 ) & 0xFF;
+             }
+             else
+             {
+-                if( ( ans_index + REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS_ERROR_SIZE ) <= max_payload_size )
+-                {
+-                    ctx->remote_multicast_tx_payload_ans[ans_index++] =
+-                        REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS;
+-                    ctx->remote_multicast_tx_payload_ans[ans_index++] = ( 1 << 4 ) | mc_grp_id;  // undefined group id
+-                }
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS;
++                ctx->remote_multicast_tx_payload_ans[ans_index++] = status;
+             }
+             rx_buffer_index += REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ_SIZE;
+             break;

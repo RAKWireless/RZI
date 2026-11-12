@@ -1,0 +1,131 @@
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -214,6 +214,44 @@
+     int32_t               frag_decoder_process_status;
+ } frag_session_data_t;
+ 
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++/* Managed reception admits one generation. TS004 N is a 14-bit wire number,
++ * independent of NbFrag: redundancy packets can use the full number space. */
++static uint8_t fragment_seen[(1U << 14) / 8];
++static uint32_t stats_generation;
++static struct lbm_fuota_rx_stats rx_stats;
++
++bool lorawan_fragmentation_get_rx_stats(uint32_t generation, struct lbm_fuota_rx_stats *out)
++{
++    if (generation == 0 || generation != stats_generation) {
++        return false;
++    }
++    *out = rx_stats;
++    return true;
++}
++
++static void record_fragment(const frag_group_data_t *group, uint16_t number, const uint8_t *payload)
++{
++    uint8_t mask = 1U << (number & 7);
++    uint8_t *seen = &fragment_seen[number >> 3];
++    if ((*seen & mask) != 0) {
++        return;
++    }
++    *seen |= mask;
++    ++rx_stats.received;
++    /* Keep the received block prefix for the application even on a failed write.
++     * Only systematic payload bytes have a file offset; padding is excluded. */
++    if (number <= group->frag_nb) {
++        uint32_t start = (uint32_t)(number - 1) * group->frag_size;
++        uint32_t end = start + group->frag_size - (number == group->frag_nb ? group->padding : 0);
++        for (uint32_t pos = start; pos < end && pos < sizeof(rx_stats.prefix); ++pos) {
++            rx_stats.prefix[pos] = payload[pos - start];
++            rx_stats.prefix_valid |= 1U << pos;
++        }
++    }
++}
++#endif
++
+ static uint8_t                nb_transmit_ans;
+ static frag_session_data_t    frag_session_data[FRAGMENTATION_MAX_NB_SESSIONS];
+ static FragDecoderCallbacks_t frag_decoder_callback;
+@@ -717,6 +755,11 @@
+                 memcpy( &frag_session_data[frag_session_data_tmp.frag_group_data.frag_session.frag_index],
+                         &frag_session_data_tmp, sizeof( frag_session_data_t ) );
+ 
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++                stats_generation = frag_session_data_tmp.frag_group_data.generation;
++                memset(fragment_seen, 0, sizeof(fragment_seen));
++                memset(&rx_stats, 0, sizeof(rx_stats));
++#endif
+                 (void)lorawan_fuota_storage_status(true);
+                 FragDecoderInit( frag_session_data_tmp.frag_group_data.frag_nb,
+                                  frag_session_data_tmp.frag_group_data.frag_size, &frag_decoder_callback );
+@@ -871,6 +914,10 @@
+                 {
+                     SMTC_MODEM_HAL_TRACE_ARRAY( "FUOTA FRAG = \n", fragmentation_package_rx_buffer,
+                                                 fragmentation_package_rx_buffer_length );
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++                    record_fragment(&frag_session_data[frag_index].frag_group_data, frag_counter,
++                                    &fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 3]);
++#endif
+                     frag_session_data[frag_index].frag_decoder_process_status = FragDecoderProcess(
+                         frag_counter, &fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 3] );
+                     if (lorawan_fuota_storage_status(false) != 0) {
+@@ -900,6 +947,10 @@
+                         .successful = frag_session_data[frag_index].frag_decoder_process_status ==
+                             FRAG_SESSION_FINISHED_SUCCESSFULLY,
+                     };
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++                    rx_stats.storage_error = info.error;
++                    rx_stats.decoder_failed = !info.successful;
++#endif
+                     lorawan_fuota_observe(stack_id, LBM_FUOTA_COMPLETE, &info);
+                     uint8_t status = ( frag_session_data[frag_index].frag_decoder_process_status < 255 )
+                                          ? frag_session_data[frag_index].frag_decoder_process_status
+@@ -931,7 +982,17 @@
+ 
+ static int8_t frag_decoder_write( uint32_t addr, uint8_t* data, uint32_t size )
+ {
+-    return lorawan_fuota_store(addr, data, size) == 0 ? 0 : -1;
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++    bool first_error = lorawan_fuota_storage_status(false) == 0;
++#endif
++    int rc = lorawan_fuota_store(addr, data, size);
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++    if (first_error && rc != 0) {
++        rx_stats.write_failed = true;
++        rx_stats.storage_error = rc;
++    }
++#endif
++    return rc == 0 ? 0 : -1;
+ }
+ 
+ static int8_t frag_decoder_read( uint32_t addr, uint8_t* data, uint32_t size )
+@@ -954,6 +1015,9 @@
+ void lorawan_fragmentation_release(uint8_t stack)
+ {
+     if (stack >= NUMBER_OF_FRAGMENTED_PACKAGE_OBJ) { return; }
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++    stats_generation = 0;
++#endif
+     for (unsigned int i = 0; i < FRAGMENTATION_MAX_NB_SESSIONS; ++i) {
+         frag_session_data[i].frag_group_data.is_active = false;
+     }
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+@@ -19,6 +19,18 @@
+     bool successful;
+     int error;
+ };
++#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
++struct lbm_fuota_rx_stats {
++    uint16_t received;
++    uint8_t prefix[16];
++    uint16_t prefix_valid; /* Bit i marks a received systematic byte at offset i. */
++    bool write_failed;
++    bool decoder_failed;
++    int storage_error;
++};
++/* Read under the modem lock, including after TS004 Delete, before a new setup. */
++bool lorawan_fragmentation_get_rx_stats(uint32_t generation, struct lbm_fuota_rx_stats *out);
++#endif
+ /* Called under the modem lock, before accepted setup mutates package/FEC state.
+  * No supported context -> standard ID/index unsupported. Occupied data storage
+  * -> standard not-enough-memory. Never put a product error in RFU bits.

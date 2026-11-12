@@ -1,0 +1,537 @@
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+@@ -40,6 +40,9 @@
+ #include <stdint.h>   // C99 types
+ #include <stdbool.h>  // bool type
+ #include "lorawan_send_management.h"
++#if defined(ADD_FUOTA) && ADD_FUOTA == 1
++#include "../lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h"
++#endif
+ #include "modem_supervisor_light.h"
+ #include "smtc_modem_api.h"
+ #include "smtc_modem_hal.h"
+@@ -195,6 +198,12 @@
+     stask_manager*   task_manager                                         = ( stask_manager* ) context;
+     lorawan_send_management_obj[STACK_ID_CURRENT_TASK].rx_ack_bit_context = 0;
+ 
++#if defined(ADD_FUOTA) && ADD_FUOTA == 1
++    if (!lorawan_fuota_business_allowed(STACK_ID_CURRENT_TASK)) {
++        task_manager->modem_task[VIRTUAL_TASK_ID].task_context = false;
++        return;
++    }
++#endif
+     send_status = tx_protocol_manager_request(
+         TX_PROTOCOL_TRANSMIT_LORA, lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport,
+         lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport_present,
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+new file mode 100644
+--- /dev/null
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/lorawan_fuota_observer.h
+@@ -0,0 +1,43 @@
++/* SPDX-License-Identifier: BSD-3-Clause-Clear */
++/* Optional v1 package integration. Defaults preserve standalone USP operation. */
++#ifndef LORAWAN_FUOTA_OBSERVER_H
++#define LORAWAN_FUOTA_OBSERVER_H
++#include <stdint.h>
++#include <stdbool.h>
++#include <stddef.h>
++enum lbm_fuota_notice {
++    LBM_FUOTA_FRAGMENT_SETUP, LBM_FUOTA_GROUP_SETUP, LBM_FUOTA_WINDOW_SETUP,
++    LBM_FUOTA_ENTERING, LBM_FUOTA_STARTED, LBM_FUOTA_ENDED, LBM_FUOTA_COMPLETE,
++    LBM_FUOTA_CONTROL_QUEUED, LBM_FUOTA_CONTROL_SENT,
++};
++struct lbm_fuota_info {
++    uint32_t generation;
++    uint16_t fragment_count;
++    uint8_t fragment_size, padding, index, multicast_mask, block_ack_delay;
++    uint32_t descriptor, session_time, timeout_s, frequency;
++    uint8_t data_rate, control;
++    bool successful;
++    int error;
++};
++/* Called under the modem lock, before accepted setup mutates package/FEC state.
++ * No supported context -> standard ID/index unsupported. Occupied data storage
++ * -> standard not-enough-memory. Never put a product error in RFU bits.
++ */
++bool lorawan_fuota_context_supported(uint8_t stack_id, uint8_t port, uint8_t index);
++bool lorawan_fuota_storage_available(uint8_t stack_id);
++bool lorawan_fuota_business_allowed(uint8_t stack_id);
++bool lorawan_fuota_class_b_supported(uint8_t stack_id);
++int lorawan_fuota_store(uint32_t offset, const uint8_t *buffer, size_t size);
++int lorawan_fuota_read(uint32_t offset, uint8_t *buffer, size_t size);
++int lorawan_fuota_storage_status(bool reset);
++size_t lorawan_fuota_storage_capacity(void);
++uint32_t lorawan_fuota_generation(uint8_t stack_id);
++void lorawan_fuota_observe(uint8_t stack_id, enum lbm_fuota_notice notice,
++                          const struct lbm_fuota_info *info);
++/* Synchronous cancellation: stops monitoring and clears pending launch/stop bits.
++ * Leaves group security and fragmentation control state intact for cleanup.
++ */
++void lorawan_remote_multicast_setup_cancel_class_c(uint8_t stack_id, uint8_t group);
++/* Explicit storage lifecycle boundary; never erases or overwrites retained bytes. */
++void lorawan_fragmentation_release(uint8_t stack_id);
++#endif
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/fragmentation_helper_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/fragmentation_helper_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/fragmentation_helper_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/fragmentation_helper_v1.0.0.c
+@@ -473,7 +473,7 @@
+ 
+     for( uint8_t i = 0; i < 32; i++ )
+     {
+-        sumBit += ( x & ( 1 << i ) ) >> i;
++        sumBit += ( x & ( 1U << i ) ) >> i;
+     }
+     if( sumBit == 1 )
+     {
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -52,6 +52,7 @@
+ #include "lr1mac_defs.h"
+ #include "lorawan_fragmentation_package.h"
+ #include "fragmentation_helper_v1.0.0.h"
++#include "../lorawan_fuota_observer.h"
+ 
+ /*
+  * -----------------------------------------------------------------------------
+@@ -159,7 +160,7 @@
+ } fragmented_package_req_t;
+ 
+ static const uint8_t frag_req_cmd_size[4] = { FRAGMENTATION_PKG_VERSION_REQ_SIZE, FRAGMENTATION_SESSION_STATUS_REQ_SIZE,
+-                                              FRAGMENTATION_SESSION_SETUP_REQ_SIZE, FRAGMENTATION_SESSION_DELETE_REQ };
++                                              FRAGMENTATION_SESSION_SETUP_REQ_SIZE, FRAGMENTATION_SESSION_DELETE_REQ_SIZE };
+ typedef struct lorawan_fragmentation_package_s
+ {
+     uint8_t stack_id;
+@@ -170,11 +171,15 @@
+     uint16_t fragmentation_ans_delay_s;
+     bool     is_pending_task;
+     bool     enabled;
++    uint8_t pending_control, inflight_control;
++    uint32_t pending_generation, inflight_generation;
++    bool tx_accepted;
+ } lorawan_fragmentation_package_ctx_t;
+ 
+ typedef struct frag_group_data_s
+ {
+     bool is_active;
++    uint32_t generation;
+     struct
+     {
+         uint8_t mc_group_bit_mask;
+@@ -286,7 +291,11 @@
+ {
+     if( lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size > 0 )
+     {
+-        tx_protocol_manager_request(
++        lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[*(uint8_t*)service_id];
++        ctx->inflight_control = ctx->pending_control;
++        ctx->inflight_generation = ctx->pending_generation;
++        ctx->pending_control = 0;
++        ctx->tx_accepted = tx_protocol_manager_request(
+             TX_PROTOCOL_TRANSMIT_LORA, FRAGMENTATION_PORT, true,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans,
+             lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size,
+@@ -294,12 +303,21 @@
+             smtc_modem_hal_get_time_in_ms( ) +
+                 smtc_modem_hal_get_random_nb_in_range(
+                     0, lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_ans_delay_s * 1000 ),
+-            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].stack_id );
++            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].stack_id ) == OKLORAWAN;
+     }
+ }
+ 
+ void lorawan_fragmentation_package_service_on_update( void* service_id )
+ {
++    lorawan_fragmentation_package_ctx_t *ctx = &lorawan_fragmentation_package_ctx[*(uint8_t*)service_id];
++    if (ctx->inflight_control) {
++        const struct lbm_fuota_info info = {
++            .generation = ctx->inflight_generation, .control = ctx->inflight_control,
++            .successful = ctx->tx_accepted && !tx_protocol_manager_tx_is_aborted(),
++        };
++        ctx->inflight_control = 0;
++        lorawan_fuota_observe(ctx->stack_id, LBM_FUOTA_CONTROL_SENT, &info);
++    }
+     lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].is_pending_task = false;
+     if( nb_transmit_ans > 1 )
+     {
+@@ -519,6 +537,10 @@
+             uint8_t participants = fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 1] & 0x01;
+ 
+             fragmentation_package_rx_buffer_index += FRAGMENTATION_SESSION_STATUS_REQ_SIZE;
++            if (frag_index >= FRAGMENTATION_MAX_NB_SESSIONS ||
++                !frag_session_data[frag_index].frag_group_data.is_active) {
++                break;
++            }
+             frag_session_data[frag_index].frag_decoder_status = FragDecoderGetStatus( );
+             uint16_t nb_frag_received = frag_session_data[frag_index].frag_decoder_status.FragNbRx -
+                                         frag_session_data[frag_index].frag_decoder_status.FragNbLost;
+@@ -537,6 +559,8 @@
+                     ctx->fragmentation_tx_payload_ans[ans_index++] =
+                         frag_session_data[frag_index].frag_decoder_status.MatrixError & 0x01;
+ 
++                    ctx->pending_control |= 1;
++                    ctx->pending_generation = frag_session_data[frag_index].frag_group_data.generation;
+                     // Fetch the co-efficient value required to calculate delay of that respective session.
+                     ctx->fragmentation_ans_delay_s =
+                         1 << ( frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4 );
+@@ -585,7 +609,7 @@
+             frag_session_data_tmp.frag_group_data.descriptor +=
+                 ( fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 9] << 16 ) & 0x00FF0000;
+             frag_session_data_tmp.frag_group_data.descriptor +=
+-                ( fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 10] << 24 ) & 0xFF000000;
++                ( (uint32_t)fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 10] << 24 ) & 0xFF000000;
+             fragmentation_package_rx_buffer_index += FRAGMENTATION_SESSION_SETUP_REQ_SIZE;
+             SMTC_MODEM_HAL_TRACE_PRINTF( "frag_nb = %d ,\n", frag_session_data_tmp.frag_group_data.frag_nb );
+             SMTC_MODEM_HAL_TRACE_PRINTF( "frag_size = %d\n", frag_session_data_tmp.frag_group_data.frag_size );
+@@ -594,10 +618,15 @@
+                 status |= 0x01;  // Encoding unsupported
+             }
+ 
++            if( frag_session_data_tmp.frag_group_data.frag_nb == 0 ||
++                frag_session_data_tmp.frag_group_data.frag_size == 0 ||
++                frag_session_data_tmp.frag_group_data.padding >= frag_session_data_tmp.frag_group_data.frag_size ) {
++                return FRAG_STATUS_ERROR; /* malformed, no fabricated standard error */
++            }
+             if( ( frag_session_data_tmp.frag_group_data.frag_nb > FRAG_MAX_NB ) ||
+                 ( frag_session_data_tmp.frag_group_data.frag_size > FRAG_MAX_SIZE ) ||
+                 ( ( frag_session_data_tmp.frag_group_data.frag_nb * frag_session_data_tmp.frag_group_data.frag_size ) >
+-                  FragDecoderGetMaxFileSize( ) ) )
++                  MIN(FragDecoderGetMaxFileSize( ), lorawan_fuota_storage_capacity()) ) )
+             {
+                 status |= 0x02;  // Not enough Memory
+             }
+@@ -616,16 +645,36 @@
+                 // status |= 0x08; // Wrong Descriptor
+             }
+ 
++            if ((status & 0x3F) == 0 && !lorawan_fuota_storage_available(stack_id)) {
++                status |= 0x02; /* retained block occupies the only decoder/storage */
++            }
++            if ((status & 0x3F) == 0 && !lorawan_fuota_context_supported(
++                    stack_id, FRAGMENTATION_PORT, frag_session_data_tmp.frag_group_data.frag_session.frag_index)) {
++                status |= 0x04; /* no supported fragmentation context in this mode */
++            }
+             if( ( status & 0x3F ) == 0 )
+             {
++                frag_session_data_tmp.frag_group_data.generation = lorawan_fuota_generation(stack_id);
+                 frag_session_data_tmp.frag_group_data.is_active   = true;
+                 frag_session_data_tmp.frag_decoder_process_status = FRAG_SESSION_NOT_STARTED;
+ 
+                 memcpy( &frag_session_data[frag_session_data_tmp.frag_group_data.frag_session.frag_index],
+                         &frag_session_data_tmp, sizeof( frag_session_data_t ) );
+ 
++                (void)lorawan_fuota_storage_status(true);
+                 FragDecoderInit( frag_session_data_tmp.frag_group_data.frag_nb,
+                                  frag_session_data_tmp.frag_group_data.frag_size, &frag_decoder_callback );
++                const struct lbm_fuota_info info = {
++                    .generation = frag_session_data_tmp.frag_group_data.generation,
++                    .fragment_count = frag_session_data_tmp.frag_group_data.frag_nb,
++                    .fragment_size = frag_session_data_tmp.frag_group_data.frag_size,
++                    .padding = frag_session_data_tmp.frag_group_data.padding,
++                    .index = frag_session_data_tmp.frag_group_data.frag_session.frag_index,
++                    .multicast_mask = frag_session_data_tmp.frag_group_data.frag_session.mc_group_bit_mask,
++                    .block_ack_delay = frag_session_data_tmp.frag_group_data.control.block_ack_delay,
++                    .descriptor = frag_session_data_tmp.frag_group_data.descriptor,
++                };
++                lorawan_fuota_observe(stack_id, LBM_FUOTA_FRAGMENT_SETUP, &info);
+             }
+             if( ( ans_index + FRAGMENTATION_SESSION_SETUP_ANS_SIZE ) <= max_payload_size )
+             {
+@@ -657,6 +706,8 @@
+             {
+                 // Delete session
+                 frag_session_data[id].frag_group_data.is_active = false;
++                ctx->pending_control |= 2;
++                ctx->pending_generation = frag_session_data[id].frag_group_data.generation;
+             }
+             if( ( ans_index + FRAGMENTATION_SESSION_DELETE_ANS_SIZE ) <= max_payload_size )
+             {
+@@ -668,6 +719,7 @@
+         }
+         case FRAGMENTATION_DATA_FRAGMENT:
+         {
++            IS_VALID_PKG_CMD(3);
+             uint8_t  frag_index   = 0;
+             uint16_t frag_counter = 0;
+ 
+@@ -678,6 +730,13 @@
+             frag_index = ( frag_counter >> 14 ) & 0x03;
+             frag_counter &= 0x3FFF;
+ 
++            if (frag_index >= FRAGMENTATION_MAX_NB_SESSIONS || frag_counter == 0 ||
++                !frag_session_data[frag_index].frag_group_data.is_active ||
++                fragmentation_package_rx_buffer_index != 0 ||
++                fragmentation_package_rx_buffer_length !=
++                    (uint16_t)frag_session_data[frag_index].frag_group_data.frag_size + 3U) {
++                return FRAG_STATUS_ERROR;
++            }
+             bool accept_data = false;
+ 
+             SMTC_MODEM_HAL_TRACE_PRINTF( "Fuota fragmentation_package_rx_window %d\n",
+@@ -749,6 +808,9 @@
+                                                 fragmentation_package_rx_buffer_length );
+                     frag_session_data[frag_index].frag_decoder_process_status = FragDecoderProcess(
+                         frag_counter, &fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 3] );
++                    if (lorawan_fuota_storage_status(false) != 0) {
++                        frag_session_data[frag_index].frag_decoder_process_status = FRAG_SESSION_FAILED;
++                    }
+                     frag_session_data[frag_index].frag_decoder_status = FragDecoderGetStatus( );
+                     SMTC_MODEM_HAL_TRACE_PRINTF( "Fuota session info:\n" );
+                     SMTC_MODEM_HAL_TRACE_PRINTF( "Current fragment index = %d\n", frag_index );
+@@ -766,6 +828,14 @@
+                     {
+                         SMTC_MODEM_HAL_TRACE_PRINTF( " FUOTA SESSION FAILED !\n" );
+                     }
++                    const struct lbm_fuota_info info = {
++                        .generation = frag_session_data[frag_index].frag_group_data.generation,
++                        .index = frag_index,
++                        .error = lorawan_fuota_storage_status(false),
++                        .successful = frag_session_data[frag_index].frag_decoder_process_status ==
++                            FRAG_SESSION_FINISHED_SUCCESSFULLY,
++                    };
++                    lorawan_fuota_observe(stack_id, LBM_FUOTA_COMPLETE, &info);
+                     uint8_t status = ( frag_session_data[frag_index].frag_decoder_process_status < 255 )
+                                          ? frag_session_data[frag_index].frag_decoder_process_status
+                                          : 255;
+@@ -796,14 +866,46 @@
+ 
+ static int8_t frag_decoder_write( uint32_t addr, uint8_t* data, uint32_t size )
+ {
+-    smtc_modem_hal_context_store( CONTEXT_FUOTA, addr, data, size );
+-    return 0;
++    return lorawan_fuota_store(addr, data, size) == 0 ? 0 : -1;
+ }
+ 
+ static int8_t frag_decoder_read( uint32_t addr, uint8_t* data, uint32_t size )
+ {
+-    smtc_modem_hal_context_restore( CONTEXT_FUOTA, addr, data, size );
+-    return 0;
++    return lorawan_fuota_read(addr, data, size) == 0 ? 0 : -1;
+ }
+ 
+ /* --- EOF ------------------------------------------------------------------ */
++
++/* Optional product observer. Standalone USP keeps its original admission policy. */
++__attribute__((weak)) bool lorawan_fuota_context_supported(uint8_t stack, uint8_t port, uint8_t index)
++{ (void)stack; (void)port; (void)index; return true; }
++__attribute__((weak)) bool lorawan_fuota_storage_available(uint8_t stack)
++{ (void)stack; return true; }
++__attribute__((weak)) uint32_t lorawan_fuota_generation(uint8_t stack)
++{ (void)stack; return 0; }
++__attribute__((weak)) void lorawan_fuota_observe(uint8_t stack, enum lbm_fuota_notice notice,
++                                               const struct lbm_fuota_info *info)
++{ (void)stack; (void)notice; (void)info; }
++void lorawan_fragmentation_release(uint8_t stack)
++{
++    if (stack >= NUMBER_OF_FRAGMENTED_PACKAGE_OBJ) { return; }
++    for (unsigned int i = 0; i < FRAGMENTATION_MAX_NB_SESSIONS; ++i) {
++        frag_session_data[i].frag_group_data.is_active = false;
++    }
++}
++
++__attribute__((weak)) bool lorawan_fuota_business_allowed(uint8_t stack)
++{ (void)stack; return true; }
++
++__attribute__((weak)) int lorawan_fuota_store(uint32_t offset, const uint8_t *data, size_t size)
++{ smtc_modem_hal_context_store(CONTEXT_FUOTA, offset, data, (uint32_t)size); return 0; }
++__attribute__((weak)) int lorawan_fuota_read(uint32_t offset, uint8_t *data, size_t size)
++{ smtc_modem_hal_context_restore(CONTEXT_FUOTA, offset, data, (uint32_t)size); return 0; }
++__attribute__((weak)) int lorawan_fuota_storage_status(bool reset)
++{ (void)reset; return 0; }
++
++__attribute__((weak)) size_t lorawan_fuota_storage_capacity(void)
++{ return FragDecoderGetMaxFileSize(); }
++
++__attribute__((weak)) bool lorawan_fuota_class_b_supported(uint8_t stack)
++{ (void)stack; return true; }
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+@@ -53,6 +53,7 @@
+ #include "lorawan_alcsync.h"
+ #include "lorawan_class_b_management.h"
+ #include "lorawan_remote_multicast_setup_package.h"
++#include "../../fragmented_data_block_transport/lorawan_fuota_observer.h"
+ #include "smtc_multicast.h"
+ #include "modem_tx_protocol_manager.h"
+ #include "lorawan_cid_request_management.h"
+@@ -198,6 +199,7 @@
+     bool     launch_class_c[NB_MULTICAST_GROUPS];
+     bool     launch_class_b[NB_MULTICAST_GROUPS];
+     bool     stop_class_c[NB_MULTICAST_GROUPS];
++    uint32_t generation[NB_MULTICAST_GROUPS];
+     bool     stop_class_b[NB_MULTICAST_GROUPS];
+     uint16_t fragmentation_ans_delay;
+ 
+@@ -397,10 +399,14 @@
+             }
+         }
+ 
++        struct lbm_fuota_info start_info = {.generation = ctx->generation[mc_grp_id], .index = mc_grp_id};
++        lorawan_fuota_observe(stack_id, LBM_FUOTA_ENTERING, &start_info);
+         lorawan_class_b_management_enable( stack_id, false, 0 );
+         lorawan_api_class_c_enabled( true, stack_id );
+-        lorawan_api_multicast_c_start_session( mc_grp_id, multicast_group_params[mc_grp_id].params.frequency,
++        lorawan_multicast_rc_t launch_result = lorawan_api_multicast_c_start_session( mc_grp_id, multicast_group_params[mc_grp_id].params.frequency,
+                                                multicast_group_params[mc_grp_id].params.dr, stack_id );
++        start_info.successful = launch_result == LORAWAN_MC_RC_OK;
++        lorawan_fuota_observe(stack_id, LBM_FUOTA_STARTED, &start_info);
+         increment_asynchronous_msgnumber( SMTC_MODEM_EVENT_NEW_MULTICAST_SESSION_CLASS_C, mc_grp_id, stack_id );
+         SMTC_MODEM_HAL_TRACE_PRINTF(
+             " lorawan_remote_multicast_setup_package launch class c session with group _id = %d , "
+@@ -427,6 +433,8 @@
+         SMTC_MODEM_HAL_TRACE_PRINTF( " lorawan_api_multicast_c_stop_session %d \n", mc_grp_id );
+         lorawan_api_multicast_c_stop_session( mc_grp_id, stack_id );
+         ctx->stop_class_c[mc_grp_id] = false;
++        const struct lbm_fuota_info end_info = {.generation = ctx->generation[mc_grp_id], .index = mc_grp_id};
++        lorawan_fuota_observe(stack_id, LBM_FUOTA_ENDED, &end_info);
+         uint8_t tmp                  = 0;
+         for( uint8_t i = 0; i < NB_MULTICAST_GROUPS; i++ )
+         {
+@@ -911,19 +919,21 @@
+             uint8_t mc_grp_id = rx_buffer[rx_buffer_index + 1] & 0x03;
+             bool    id_error  = 0;
+ 
+-            if( mc_grp_id < NB_MULTICAST_GROUPS )
+-            {
++            if( mc_grp_id < NB_MULTICAST_GROUPS &&
++                lorawan_fuota_context_supported(stack_id, REMOTE_MULTICAST_SETUP_PORT, mc_grp_id) )
++            {
++                ctx->generation[mc_grp_id] = lorawan_fuota_generation(stack_id);
+                 uint8_t mc_key_encrypted[16];
+                 multicast_group_params[mc_grp_id].mc_addr =
+                     rx_buffer[rx_buffer_index + 2] + ( rx_buffer[rx_buffer_index + 3] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( rx_buffer[rx_buffer_index + 5] << 24 );
++                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 5] << 24 );
+                 memcpy( mc_key_encrypted, &rx_buffer[rx_buffer_index + 6], 16 );
+                 multicast_group_params[mc_grp_id].min_fc_fcount =
+                     rx_buffer[rx_buffer_index + 22] + ( rx_buffer[rx_buffer_index + 23] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 24] << 16 ) + ( rx_buffer[rx_buffer_index + 25] << 24 );
++                    ( rx_buffer[rx_buffer_index + 24] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 25] << 24 );
+                 multicast_group_params[mc_grp_id].max_fc_fcount =
+                     rx_buffer[rx_buffer_index + 26] + ( rx_buffer[rx_buffer_index + 27] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 28] << 16 ) + ( rx_buffer[rx_buffer_index + 29] << 24 );
++                    ( rx_buffer[rx_buffer_index + 28] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 29] << 24 );
+ 
+                 lorawan_api_multicast_set_fcnt_down_range( mc_grp_id, multicast_group_params[mc_grp_id].min_fc_fcount,
+                                                            multicast_group_params[mc_grp_id].max_fc_fcount, stack_id );
+@@ -931,6 +941,8 @@
+                                                          stack_id );
+                 lorawan_api_multicast_derive_group_keys( mc_grp_id, mc_key_encrypted, stack_id );
+                 multicast_group_params[mc_grp_id].active = true;
++                const struct lbm_fuota_info info = {.index = mc_grp_id, .generation = ctx->generation[mc_grp_id]};
++                lorawan_fuota_observe(stack_id, LBM_FUOTA_GROUP_SETUP, &info);
+             }
+             else
+             {
+@@ -960,6 +972,11 @@
+                     ctx->remote_multicast_tx_payload_ans[ans_index++] =
+                         ( ( multicast_group_params[mc_grp_id].active == true ) ? 0x00 : 0x04 ) | mc_grp_id;
+                 }
++                const struct lbm_fuota_info deleted_info = {
++                    .generation = ctx->generation[mc_grp_id], .index = mc_grp_id,
++                };
++                lorawan_remote_multicast_setup_cancel_class_c(stack_id, mc_grp_id);
++                lorawan_fuota_observe(stack_id, LBM_FUOTA_ENDED, &deleted_info);
+                 multicast_group_params[mc_grp_id].active = false;
+                 // reset time out to force stop class c in case of class c is already started
+                 multicast_group_params[mc_grp_id].params.time_out = 0;
+@@ -986,14 +1003,20 @@
+         case REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ:
+         {
+             IS_VALID_PKG_CMD( REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_REQ_SIZE );
++            if (!lorawan_fuota_context_supported(stack_id, REMOTE_MULTICAST_SETUP_PORT,
++                    rx_buffer[rx_buffer_index + 1] & 0x03)) {
++                return REMOTE_MULTICAST_SETUP_STATUS_ERROR;
++            }
+             uint8_t mc_grp_id = rx_buffer[rx_buffer_index + 1] & 0x03;
++            ctx->generation[mc_grp_id] = lorawan_fuota_generation(stack_id);
+ 
+             // Check if group id is in supported range
+             if( mc_grp_id < NB_MULTICAST_GROUPS )
+             {
++                multicast_session_params_t saved_params = multicast_group_params[mc_grp_id].params;
+                 multicast_group_params[mc_grp_id].params.session_time =
+                     rx_buffer[rx_buffer_index + 2] + ( rx_buffer[rx_buffer_index + 3] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( rx_buffer[rx_buffer_index + 5] << 24 );
++                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 5] << 24 );
+                 multicast_group_params[mc_grp_id].params.time_out = ( 1 << ( rx_buffer[rx_buffer_index + 6] & 0x0F ) );
+                 multicast_group_params[mc_grp_id].params.frequency =
+                     lorawan_api_decode_freq_from_24bits_buf( ctx->stack_id, &rx_buffer[rx_buffer_index + 7] );
+@@ -1036,6 +1059,9 @@
+                                         ? ( 1 << 2 )
+                                         : 0;
+ 
++                if (mc_grp_id_status != mc_grp_id) {
++                    multicast_group_params[mc_grp_id].params = saved_params;
++                }
+                 if( ( ans_index + REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_C_SESSION_ANS_SIZE ) <= max_payload_size )
+                 {
+                     ctx->remote_multicast_tx_payload_ans[ans_index++] =
+@@ -1054,6 +1080,14 @@
+                         ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 8 ) & 0xFF;
+                         ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 16 ) & 0xFF;
+                         ctx->launch_class_c[mc_grp_id]                    = true;
++                        const struct lbm_fuota_info info = {
++                            .generation = ctx->generation[mc_grp_id], .index = mc_grp_id,
++                            .session_time = multicast_group_params[mc_grp_id].params.session_time,
++                            .timeout_s = multicast_group_params[mc_grp_id].params.time_out,
++                            .frequency = multicast_group_params[mc_grp_id].params.frequency,
++                            .data_rate = multicast_group_params[mc_grp_id].params.dr,
++                        };
++                        lorawan_fuota_observe(stack_id, LBM_FUOTA_WINDOW_SETUP, &info);
+                     }
+                 }
+             }
+@@ -1071,15 +1105,20 @@
+         }
+         case REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_B_SESSION_REQ:
+         {
++            /* Admission policy is evaluated before changing radio/class state. */
++            if (!lorawan_fuota_class_b_supported(stack_id)) {
++                return REMOTE_MULTICAST_SETUP_STATUS_ERROR;
++            }
+             IS_VALID_PKG_CMD( REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_B_SESSION_REQ_SIZE );
+             uint8_t mc_grp_id = rx_buffer[rx_buffer_index + 1] & 0x03;
+ 
+             // Check if group id is in supported range
+             if( mc_grp_id < NB_MULTICAST_GROUPS )
+             {
++                multicast_session_params_t saved_params = multicast_group_params[mc_grp_id].params;
+                 multicast_group_params[mc_grp_id].params.session_time =
+                     rx_buffer[rx_buffer_index + 2] + ( rx_buffer[rx_buffer_index + 3] << 8 ) +
+-                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( rx_buffer[rx_buffer_index + 5] << 24 );
++                    ( rx_buffer[rx_buffer_index + 4] << 16 ) + ( (uint32_t)rx_buffer[rx_buffer_index + 5] << 24 );
+                 multicast_group_params[mc_grp_id].params.time_out =
+                     ( 1 << ( rx_buffer[rx_buffer_index + 6] & 0x0F ) ) * 128;
+                 multicast_group_params[mc_grp_id].params.periodicity =
+@@ -1126,6 +1165,9 @@
+                                         ? ( 1 << 2 )
+                                         : 0;
+ 
++                if (mc_grp_id_status != mc_grp_id) {
++                    multicast_group_params[mc_grp_id].params = saved_params;
++                }
+                 if( ( ans_index + REMOTE_MULTICAST_SETUP_MC_GROUP_CLASS_B_SESSION_ANS_SIZE ) <= max_payload_size )
+                 {
+                     ctx->remote_multicast_tx_payload_ans[ans_index++] =
+@@ -1175,3 +1217,17 @@
+ }
+ 
+ /* --- EOF ------------------------------------------------------------------ */
++
++void lorawan_remote_multicast_setup_cancel_class_c(uint8_t stack, uint8_t group)
++{
++    if (group >= NB_MULTICAST_GROUPS) { return; }
++    for (unsigned int i = 0; i < NUMBER_OF_REMOTE_MULTICAST_SETUP_PACKAGE_OBJ; ++i) {
++        lorawan_remote_multicast_setup_package_ctx_t *ctx = &lorawan_remote_multicast_setup_package_ctx[i];
++        if (ctx->stack_id != stack) { continue; }
++        lorawan_api_multicast_c_stop_session(group, stack);
++        ctx->launch_class_c[group] = false;
++        ctx->stop_class_c[group] = false;
++        ctx->task_ctx_mask &= ~((1UL << (LAUNCH_CLASS_C_TASK_GROUP_ID_0 + group)) |
++                                (1UL << (STOP_CLASS_C_TASK_GROUP_ID_0 + group)));
++    }
++}

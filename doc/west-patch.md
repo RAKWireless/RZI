@@ -103,3 +103,7 @@ Zephyr's `west patch`; this avoids CRLF-related checksum differences.
 Patches are temporary compatibility measures. Remove a patch once the pinned
 upstream revision contains the equivalent fix, and prefer immutable upstream
 commits for RZI releases.
+
+## FUOTA receive Agent patches
+
+`usp/0012-fuota-v1-agent-hooks.patch` adds optional v1 package admission, generation metadata, multicast cancellation and local control completion. `usp_zephyr/0013-fuota-checked-storage.patch` exposes checked provider storage operations and capacity without changing partitions. See [FUOTA receive Agent design](fuota-agent.md). These patches do not depend on local TIME_DIAG insertions. Preserve dirty modules; validate additions in an isolated checkout before any cleanup.

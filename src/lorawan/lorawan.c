@@ -240,6 +240,20 @@ static void update_state_from_backend(const struct rzi_lorawan_backend_event *ev
 	}
 }
 
+static bool business_allowed(void)
+{
+	bool allowed = true;
+	k_mutex_lock(&services_lock, K_FOREVER);
+	for (size_t i = 0; i < service_count; ++i) {
+		if (services[i]->business_allowed && !services[i]->business_allowed()) {
+			allowed = false;
+			break;
+		}
+	}
+	k_mutex_unlock(&services_lock);
+	return allowed;
+}
+
 static void dispatch(const struct rzi_lorawan_backend_event *event)
 {
 	struct callback_slot subscribers[CONFIG_RZI_LORAWAN_MAX_CALLBACKS] = {0};
@@ -268,6 +282,9 @@ static void dispatch(const struct rzi_lorawan_backend_event *event)
 
 	update_state_from_backend(event);
 	deliver = event_from_backend(event, &public_event);
+	if (event->type == RZI_LORAWAN_BACKEND_DOWNLINK && !business_allowed()) {
+		deliver = false;
+	}
 	for (size_t i = 0; i < count; ++i) {
 		const struct rzi_lorawan_callbacks *callbacks = &subscribers[i].callbacks;
 
@@ -837,6 +854,9 @@ int rzi_lorawan_send(uint8_t port, const uint8_t *data, size_t size,
 	if (rc != 0) {
 		return rc;
 	}
+	if (!business_allowed()) {
+		return -RZI_ERR_BUSY;
+	}
 	rzi_lorawan_mac_commands_on_uplink();
 	return rzi_lorawan_backend.base.send(port, data, size, type);
 }
@@ -859,6 +879,9 @@ int rzi_lorawan_send_empty(bool with_port, uint8_t port, enum rzi_lorawan_messag
 	rc = check_joined();
 	if (rc != 0) {
 		return rc;
+	}
+	if (!business_allowed()) {
+		return -RZI_ERR_BUSY;
 	}
 	rzi_lorawan_mac_commands_on_uplink();
 	return ops->send_empty(with_port, port, type);

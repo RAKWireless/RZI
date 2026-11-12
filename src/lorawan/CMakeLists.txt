@@ -43,3 +43,6 @@ if(CONFIG_RZI_LORAWAN_BACKEND_ZEPHYR)
     "cmake_language(DEFER DIRECTORY \"${CMAKE_SOURCE_DIR}\" CALL target_sources loramac-node PRIVATE \"${RZI_ZEPHYR_MIB_C}\")"
   )
 endif()
+
+zephyr_library_sources_ifdef(CONFIG_RZI_LORAWAN_FUOTA_AGENT services/fuota/fuota_agent.c)
+zephyr_library_sources_ifdef(CONFIG_RZI_LORAWAN_FUOTA_TRACE services/fuota/fuota_trace.c)
