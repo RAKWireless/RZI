@@ -8,6 +8,8 @@
 #include <rzi/lorawan/lorawan.h>
 #include "backend/lorawan_backend.h"
 #include "callback_log.h"
+#include "fuota_event_log.h"
+#include "fuota_receive_demo.h"
 
 static rzi_lorawan_event_sink_t sink;
 static atomic_t closes, restores, uplinks, releases, sends, downlinks, completions;
@@ -92,6 +94,8 @@ static int clock_sync(void)
 {
 	return 0;
 }
+static int (*test_image_reader)(uint32_t offset, uint8_t *buffer, size_t size);
+
 static int image_size(size_t *n)
 {
 	*n = sizeof(raw);
@@ -99,6 +103,9 @@ static int image_size(size_t *n)
 }
 static int read_image(uint32_t o, uint8_t *d, size_t n)
 {
+	if (test_image_reader) {
+		return test_image_reader(o, d, n);
+	}
 	if (o > sizeof(raw) || n > sizeof(raw) - o) {
 		return -RZI_ERR_INVALID;
 	}
@@ -319,6 +326,7 @@ static void before(void *data)
 {
 	ARG_UNUSED(data);
 	zassert_ok(rzi_fuota_register_callbacks(&fixture_callbacks));
+	test_image_reader = NULL;
 	close_error = restore_error = uplink_error = 0;
 	rx_stats = (struct rzi_fuota_rx_stats){0};
 	struct rzi_fuota_snapshot s = snapshot();
@@ -385,6 +393,55 @@ ZTEST(rzi_fuota_agent, test_early_complete_retention_and_repeat)
 	zassert_equal(snapshot().phase, RZI_FUOTA_PRECONFIG);
 	zassert_false(snapshot().data.ready);
 }
+/* A 65-byte candidate exercises two full reads and a one-byte tail. */
+static size_t demo_next_offset;
+static bool demo_fail_second_read;
+
+static int demo_read_image(uint32_t offset, uint8_t *buffer, size_t size)
+{
+	zassert_equal(offset, demo_next_offset);
+	zassert_true(offset < 65);
+	zassert_equal(size, MIN(32U, 65U - offset));
+	if (offset == 32 && demo_fail_second_read) {
+		return -RZI_ERR_IO;
+	}
+	memset(buffer, 0xa5, size);
+	demo_next_offset += size;
+	return 0;
+}
+
+ZTEST(rzi_fuota_agent, test_demo_releases_only_after_last_read)
+{
+	setup_session(RZI_LORAWAN_CLASS_C);
+	receiving();
+	const struct rzi_lorawan_backend_event done = {
+		.type = RZI_LORAWAN_BACKEND_FUOTA,
+		.fuota = {.kind = RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE,
+			  .generation = generation, .session = session,
+			  .successful = true, .image_size = 65},
+	};
+	sink(&done);
+	wait_phase(RZI_FUOTA_FINALIZING);
+	zassert_equal(fuota_receive_demo_consume(generation), -RZI_ERR_BUSY);
+	finish_control(1);
+	test_image_reader = demo_read_image;
+	demo_next_offset = 0;
+	demo_fail_second_read = true;
+	zassert_equal(fuota_receive_demo_consume(generation + 1), -RZI_ERR_NOT_FOUND);
+	zassert_equal(fuota_receive_demo_consume(generation), -RZI_ERR_IO);
+	zassert_equal(demo_next_offset, 32);
+	zassert_true(snapshot().data.ready);
+	zassert_equal(atomic_get(&releases), 0);
+
+	demo_next_offset = 0;
+	demo_fail_second_read = false;
+	zassert_ok(fuota_receive_demo_consume(generation));
+	zassert_equal(demo_next_offset, 65);
+	zassert_false(snapshot().data.ready);
+	zassert_equal(fuota_receive_demo_consume(generation), -RZI_ERR_NOT_FOUND);
+	zassert_equal(atomic_get(&releases), 1);
+}
+
 ZTEST(rzi_fuota_agent, test_business_two_way_gate)
 {
 	static const uint8_t byte = 0x42;
@@ -857,6 +914,51 @@ ZTEST(rzi_fuota_agent, test_delete_fragment_only_preconfig_allows_new_generation
 	receiving();
 	zassert_equal(snapshot().session.generation, generation);
 	zassert_false(snapshot().exit.delete_answered);
+}
+
+K_MSGQ_DEFINE(observed_reports, sizeof(struct uplink_log_event), 4, 1);
+K_SEM_DEFINE(report_barrier, 0, 1);
+
+static void collect_report(const struct rzi_fuota_event *event, void *user)
+{
+	struct uplink_log_event record;
+
+	ARG_UNUSED(user);
+	if (fuota_event_log_record(event, &record)) {
+		zassert_ok(k_msgq_put(&observed_reports, &record, K_NO_WAIT));
+	}
+	if (event->type == RZI_FUOTA_EVENT_TIME) {
+		k_sem_give(&report_barrier);
+	}
+}
+
+ZTEST(rzi_fuota_agent, test_event_reports_from_agent_notifications)
+{
+	const struct rzi_fuota_callbacks callbacks = {.agent_event = collect_report};
+	struct uplink_log_event record;
+	const uint8_t started[] = {0x2c, 1, 32, 2};
+	const uint8_t incomplete[] = {2, 1, 0x2c, 1};
+
+	zassert_ok(rzi_fuota_register_callbacks(&callbacks));
+	setup_session(RZI_LORAWAN_CLASS_C);
+	session.fragment_count = 300;
+	session.fragment_size = 32;
+	session.fragment_index = 2;
+	receiving();
+	rx_stats = (struct rzi_fuota_rx_stats){.valid = true, .received = 258};
+	notice(RZI_LORAWAN_BACKEND_FUOTA_SESSION_ENDED, generation, true, 0);
+	wait_phase(RZI_FUOTA_FINALIZING);
+	finish_control(2);
+	notice(RZI_LORAWAN_BACKEND_FUOTA_CLOCK_SYNCED, 0, true, 0);
+	zassert_ok(k_sem_take(&report_barrier, K_SECONDS(1)));
+	zassert_equal(k_msgq_num_used_get(&observed_reports), 2);
+	zassert_ok(k_msgq_get(&observed_reports, &record, K_NO_WAIT));
+	zassert_equal(record.code, UPLINK_LOG_EVENT_FUOTA_STARTED);
+	zassert_mem_equal(record.data, started, 4);
+	zassert_ok(k_msgq_get(&observed_reports, &record, K_NO_WAIT));
+	zassert_equal(record.code, UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE);
+	zassert_mem_equal(record.data, incomplete, 4);
+	zassert_ok(rzi_fuota_register_callbacks(&fixture_callbacks));
 }
 
 ZTEST(rzi_fuota_agent, test_window_timeout_preserves_pending_write_failure)

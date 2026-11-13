@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: Apache-2.0
+mainmenu "RZI LoRaWAN FUOTA sample"
+
+config APP_FUOTA_RECEIVE_DEMO
+	bool "Read and release each completed FUOTA block"
+	depends on RZI_LORAWAN_FUOTA_AGENT
+	help
+	  Run the receive example in the application thread after FINISHED.
+	  By default the application keeps the candidate for a later decision.
+
+source "Kconfig.zephyr"

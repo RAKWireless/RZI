@@ -5,17 +5,20 @@ sample:
   name: RZI LoRaWAN FUOTA
   description: >
     Join a LoRaWAN network and accept ChirpStack FUOTA deployments through RZI
+common:
+  sysbuild: true
+  build_only: true
+  tags:
+    - rzi
+    - lorawan
+    - fuota
+  platform_allow:
+    - rak4631/nrf52840/rzi
+    - rak3372_f/stm32wle5xx
+  integration_platforms:
+    - rak4631/nrf52840/rzi
+    - rak3372_f/stm32wle5xx
 tests:
-  sample.rzi.lorawan.fuota:
-    sysbuild: true
-    build_only: true
-    tags:
-      - rzi
-      - lorawan
-      - fuota
-    platform_allow:
-      - rak4631/nrf52840/rzi
-      - rak3372_f/stm32wle5xx
-    integration_platforms:
-      - rak4631/nrf52840/rzi
-      - rak3372_f/stm32wle5xx
+  sample.rzi.lorawan.fuota: {}
+  sample.rzi.lorawan.fuota.receive_demo:
+    extra_args: fuota_CONFIG_APP_FUOTA_RECEIVE_DEMO=y

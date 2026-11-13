@@ -14,4 +14,6 @@ target_sources(app PRIVATE
   ${UPLINK_LOG_DIR}/src/uplink_log.c
   ${UPLINK_LOG_DIR}/src/uplink_log_frame.c
 )
+target_sources_ifdef(CONFIG_RZI_LORAWAN_FUOTA_AGENT app PRIVATE src/fuota_event_log.c)
+target_sources_ifdef(CONFIG_APP_FUOTA_RECEIVE_DEMO app PRIVATE src/fuota_receive_demo.c)
 target_include_directories(app PRIVATE ${UPLINK_LOG_DIR}/include)

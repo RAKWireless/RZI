@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include "fuota_event_log.h"
+#include "uplink_log_port.h"
 #include "modem_core.h"
 #include "modem_event_utilities.h"
 #include "modem_supervisor_light.h"
@@ -42,6 +44,25 @@ static unsigned int checks;
 			abort();                                                                   \
 		}                                                                                  \
 	} while (0)
+
+static struct lbm_fuota_info accepted_setup;
+static uint8_t report_frame[UPLINK_LOG_FRAME_SIZE];
+static bool report_sent;
+
+static uint32_t report_time(void *ctx)
+{
+	(void)ctx;
+	return 0;
+}
+
+static int capture_report(void *ctx, const uint8_t *frame, size_t size, bool confirmed)
+{
+	(void)ctx;
+	CHECK(confirmed && size == sizeof(report_frame));
+	memcpy(report_frame, frame, size);
+	report_sent = true;
+	return 0;
+}
 
 void smtc_modem_hal_print_trace(const char *fmt, ...)
 {
@@ -146,6 +167,7 @@ void lorawan_fuota_observe(uint8_t s, enum lbm_fuota_notice n, const struct lbm_
 	notice_count[n]++;
 	if (n == LBM_FUOTA_FRAGMENT_SETUP) {
 		occupied = true;
+		accepted_setup = *info;
 	}
 }
 size_t lorawan_fuota_storage_capacity(void)
@@ -661,8 +683,133 @@ static void clocks(void)
 	puts("PASS real TS003 version, no-answer/wrong-token, AppTime, periodicity and forced "
 	     "resync");
 }
+static void check_report(const char *scenario, const struct rzi_fuota_event *event, uint8_t code,
+			 const uint8_t data[4])
+{
+	const struct uplink_log_port port = {.uptime_sec = report_time, .send = capture_report};
+	const struct uplink_log_options options = {.device_code = UPLINK_LOG_MODULE_RAK3172_F};
+	struct uplink_log_event record;
+	uint8_t expected[] = {0x40, 0x03,    0x03,    0,       0,      0x05,
+			      code, data[0], data[1], data[2], data[3]};
+
+	CHECK(fuota_event_log_record(event, &record));
+	CHECK(uplink_log_init(&port, &options) == UPLINK_LOG_OK);
+	CHECK(uplink_log_set_link(true) == UPLINK_LOG_OK);
+	CHECK(uplink_log_submit_event(&record) == UPLINK_LOG_OK);
+	report_sent = false;
+	(void)uplink_log_process();
+	CHECK(report_sent && memcmp(report_frame, expected, sizeof(expected)) == 0);
+	printf("FPort %u %s:", UPLINK_LOG_FPORT, scenario);
+	for (size_t i = 0; i < sizeof(report_frame); ++i) {
+		printf(" %02X", report_frame[i]);
+	}
+	puts("");
+}
+
+static void capture_stats(struct rzi_fuota_event *event)
+{
+	struct lbm_fuota_rx_stats stats;
+	CHECK(!lorawan_fragmentation_get_rx_stats(accepted_setup.generation + 1, &stats));
+	CHECK(lorawan_fragmentation_get_rx_stats(accepted_setup.generation, &stats));
+	struct rzi_fuota_rx_stats *rx = &event->snapshot.exit.fragments;
+	rx->valid = true;
+	rx->received = stats.received;
+	rx->error = stats.decoder_failed ? -1 : 0;
+	rx->storage_errno = stats.storage_error;
+	rx->write_failed = stats.write_failed;
+	rx->prefix_valid = stats.prefix_valid;
+	memcpy(rx->prefix, stats.prefix, sizeof(rx->prefix));
+}
+
+static void event_data_reports(void)
+{
+	uint8_t conf[sizeof(setup)];
+	uint8_t frag[] = {8, 3, 0, 1, 2, 3, 4};
+	struct rzi_fuota_event event = {.type = RZI_FUOTA_EVENT_PHASE};
+	struct rzi_fuota_session_info *session = &event.snapshot.session;
+	struct uplink_log_event unused;
+	reset();
+	memcpy(conf, setup, sizeof(conf));
+	conf[2] = 8;
+	frag_input(conf, sizeof(conf), RECEIVE_ON_RX1);
+	frag_launch(frag_context);
+	frag_update(frag_context);
+	session->valid = RZI_FUOTA_SESSION_FRAGMENT;
+	session->fragment_count = accepted_setup.fragment_count;
+	session->fragment_size = accepted_setup.fragment_size;
+	session->fragment_index = accepted_setup.index;
+	event.snapshot.phase = RZI_FUOTA_RECEIVING;
+	check_report("started", &event, 0x01, (uint8_t[]){8, 0, 4, 0});
+	event.type = RZI_FUOTA_EVENT_FINISHED;
+	event.snapshot.phase = RZI_FUOTA_READY;
+	event.snapshot.exit.reason = RZI_FUOTA_EXIT_TIMEOUT;
+	capture_stats(&event);
+	CHECK(!fuota_event_log_record(&event, &unused)); /* PRECONFIG timeout */
+	event.snapshot.exit.reception_started = true;
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP1);
+	frag_input(frag, sizeof(frag) - 1, RECEIVE_ON_RX1);
+	capture_stats(&event);
+	check_report("zero", &event, 0x08, (uint8_t[]){0, 0, 8, 0});
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP0);
+	frag[1] = 2; /* out of order, still received */
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP0);
+	capture_stats(&event);
+	check_report("partial", &event, 0x08, (uint8_t[]){2, 0, 8, 0});
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP0);
+	frag_input(conf, sizeof(conf), RECEIVE_ON_RX1); /* identical SetupReq preserves counters */
+	frag[1] = 9;                                    /* redundancy */
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP0);
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RXC_MC_GRP0);
+	capture_stats(&event);
+	check_report("duplicates_and_redundancy", &event, 0x08, (uint8_t[]){3, 0, 8, 0});
+	reset();
+	frag_input(conf, sizeof(conf), RECEIVE_ON_RX1);
+	capture_stats(&event);
+	check_report("next_setup", &event, 0x08, (uint8_t[]){0, 0, 8, 0});
+	frag[1] = 4; /* business header offsets 12..15 */
+	write_fail = true;
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RX1);
+	capture_stats(&event);
+	CHECK(event.snapshot.exit.fragments.storage_errno == -5 &&
+	      event.snapshot.exit.fragments.write_failed);
+	check_report("write_failure", &event, 0x07, (uint8_t[]){1, 2, 3, 4});
+	reset();
+	frag_input(conf, sizeof(conf), RECEIVE_ON_RX1);
+	write_fail = true;
+	frag[1] = 1;
+	frag_input(frag, sizeof(frag), RECEIVE_ON_RX1);
+	capture_stats(&event);
+	CHECK(event.snapshot.exit.fragments.write_failed &&
+	      !(event.snapshot.exit.fragments.prefix_valid & 0xf000U));
+	CHECK(!fuota_event_log_record(&event, &unused));
+	puts("PASS write failure before version is available retains errno; no fabricated result");
+	lorawan_fragmentation_release(0);
+	struct lbm_fuota_rx_stats retired;
+	CHECK(!lorawan_fragmentation_get_rx_stats(accepted_setup.generation, &retired));
+
+	/* Cross the byte boundary in both LE16 fields with an actual TS004 session. */
+	reset();
+	conf[2] = 0x2c;
+	conf[3] = 1;
+	frag_input(conf, sizeof(conf), RECEIVE_ON_RX1);
+	session->fragment_count = accepted_setup.fragment_count;
+	event.type = RZI_FUOTA_EVENT_PHASE;
+	event.snapshot.phase = RZI_FUOTA_RECEIVING;
+	check_report("started_300", &event, 0x01, (uint8_t[]){0x2c, 1, 4, 0});
+	for (uint16_t n = 1; n <= 258; ++n) {
+		frag[1] = (uint8_t)n;
+		frag[2] = (uint8_t)(n >> 8);
+		frag_input(frag, sizeof(frag), RECEIVE_ON_RX1);
+	}
+	event.type = RZI_FUOTA_EVENT_FINISHED;
+	event.snapshot.phase = RZI_FUOTA_READY;
+	capture_stats(&event);
+	check_report("received_258", &event, 0x08, (uint8_t[]){2, 1, 0x2c, 1});
+}
+
 int main(void)
 {
+	event_data_reports();
 	setup_retries();
 	package_versions();
 	transfer();

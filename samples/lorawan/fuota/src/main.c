@@ -15,6 +15,12 @@
 #include <uplink_log.h>
 
 #include "uplink_log_rzi.h"
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+#include "fuota_event_log.h"
+#endif
+#ifdef CONFIG_APP_FUOTA_RECEIVE_DEMO
+#include "fuota_receive_demo.h"
+#endif
 
 static __maybe_unused void ignore_result(int result)
 {
@@ -24,7 +30,9 @@ static __maybe_unused void ignore_result(int result)
 LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 
 #define USER_NODE          DT_PATH(zephyr_user)
-#define LORAWAN_REGION     RZI_LORAWAN_REGION_EU_868
+#ifndef RZI_FUOTA_SAMPLE_REGION
+#define RZI_FUOTA_SAMPLE_REGION RZI_LORAWAN_REGION_EU_868
+#endif
 #define RETRY_DELAY_S      5
 #define RETRY_DELAY        K_SECONDS(RETRY_DELAY_S)
 #define UPLINK_INTERVAL_MS 5000
@@ -43,16 +51,27 @@ LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 #define DEVICE_CODE UPLINK_LOG_MODULE_UNKNOWN
 #endif
 
-/* FUOTA session milestones handed from the dispatcher thread to main. */
-#define FUOTA_SESSION_STARTED BIT(0)
-#define FUOTA_SESSION_ENDED   BIT(1)
-#define FUOTA_FRAG_INCOMPLETE BIT(2)
-
+/* The application thread owns the log drain. Copy the payload while the
+ * callback snapshot is alive; a later session may already use the receiver. */
+enum drain_request {
+	DRAIN_UNCHANGED,
+	DRAIN_PAUSE,
+	DRAIN_RESUME
+};
+static atomic_t pending_drain;
+#ifdef CONFIG_APP_FUOTA_RECEIVE_DEMO
+/* The backend can retain one completed generation. Zero means no work. */
+static atomic_t finished_generation;
+#endif
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+K_MSGQ_DEFINE(fuota_reports, sizeof(struct uplink_log_event), UPLINK_LOG_QUEUE_DEPTH, 1);
+#endif
 static K_SEM_DEFINE(stack_ready, 0, 1);
 static K_SEM_DEFINE(join_done, 0, 1);
 static volatile bool joined;
-static atomic_t fuota_milestones;
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 static enum rzi_fuota_state fuota_state;
+#endif
 
 static const char *tx_status_str(enum rzi_lorawan_tx_status status)
 {
@@ -134,9 +153,9 @@ static void on_event(const struct rzi_lorawan_event *event, void *user_data)
 	}
 }
 
-static void post_fuota_milestone(atomic_val_t milestone)
+static void request_log_drain(enum drain_request request)
 {
-	atomic_or(&fuota_milestones, milestone);
+	atomic_set(&pending_drain, request);
 	uplink_log_rzi_wakeup();
 }
 
@@ -144,73 +163,103 @@ static void on_fuota_state(enum rzi_fuota_state state, void *user_data)
 {
 	ARG_UNUSED(user_data);
 	LOG_INF("FUOTA %s", fuota_state_str(state));
-	/* The session ended before the image was reconstructed. */
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 	if (fuota_state == RZI_FUOTA_STATE_TRANSFERRING && state == RZI_FUOTA_STATE_READY) {
-		post_fuota_milestone(FUOTA_FRAG_INCOMPLETE | FUOTA_SESSION_ENDED);
+		request_log_drain(DRAIN_RESUME);
 	}
 	fuota_state = state;
+#endif
 }
 
 static void on_fuota_session_started(void *user_data)
 {
 	ARG_UNUSED(user_data);
 	LOG_INF("FUOTA transfer started");
-	post_fuota_milestone(FUOTA_SESSION_STARTED);
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	request_log_drain(DRAIN_PAUSE);
+#endif
 }
 
 static void on_fuota_complete(int status, void *user_data)
 {
 	ARG_UNUSED(user_data);
-	if (status != 0) {
-		LOG_ERR("FUOTA failed: %s", rzi_err_str(status));
-		post_fuota_milestone(FUOTA_FRAG_INCOMPLETE | FUOTA_SESSION_ENDED);
-		return;
+	if (status) {
+		LOG_ERR("FUOTA transfer failed: %s", rzi_err_str(status));
+	} else {
+		LOG_INF("FUOTA transfer complete");
 	}
-	LOG_INF("FUOTA finished");
-	post_fuota_milestone(FUOTA_SESSION_ENDED);
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	request_log_drain(DRAIN_RESUME);
+#endif
 }
 
 static const struct rzi_lorawan_callbacks callbacks = {
 	.on_event = on_event,
 };
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+static void on_fuota_event(const struct rzi_fuota_event *event, void *user_data)
+{
+	struct uplink_log_event record;
+	const struct rzi_fuota_exit_state *exit = &event->snapshot.exit;
+
+	ARG_UNUSED(user_data);
+	if (event->type == RZI_FUOTA_EVENT_PHASE && event->snapshot.phase == RZI_FUOTA_RECEIVING) {
+		request_log_drain(DRAIN_PAUSE);
+	} else if (event->type == RZI_FUOTA_EVENT_RESTORED) {
+		request_log_drain(DRAIN_RESUME);
+	} else if (event->type == RZI_FUOTA_EVENT_CLOSED && exit->fragments.write_failed) {
+		LOG_ERR("fuota.flash_fail generation=%u errno=%d",
+			event->snapshot.session.generation, exit->fragments.storage_errno);
+	} else if (event->type == RZI_FUOTA_EVENT_CLOSED && exit->fragments.error &&
+		   !exit->fragments.storage_errno) {
+		LOG_ERR("fuota.fec_fail generation=%u error=%d", event->snapshot.session.generation,
+			exit->fragments.error);
+	}
+#ifdef CONFIG_APP_FUOTA_RECEIVE_DEMO
+	if (event->type == RZI_FUOTA_EVENT_FINISHED && event->snapshot.data.ready) {
+		atomic_set(&finished_generation, event->snapshot.data.generation);
+		uplink_log_rzi_wakeup();
+	}
+#endif
+	if (fuota_event_log_record(event, &record)) {
+		if (k_msgq_put(&fuota_reports, &record, K_NO_WAIT)) {
+			LOG_ERR("FUOTA log queue full: generation=%u code=0x%02x",
+				event->snapshot.session.generation, record.code);
+		}
+		uplink_log_rzi_wakeup();
+	}
+}
+#endif
+
 static const struct rzi_fuota_callbacks fuota_callbacks = {
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	.agent_event = on_fuota_event,
+#endif
 	.state_changed = on_fuota_state,
 	.session_started = on_fuota_session_started,
 	.complete = on_fuota_complete,
 };
 
-static void submit_fuota_event(uint8_t code)
-{
-	struct uplink_log_event event = {
-		.domain = UPLINK_LOG_EVENT_DOMAIN_FUOTA,
-		.code = code,
-	};
-	int rc = uplink_log_submit_event(&event);
-
-	if (rc != UPLINK_LOG_OK) {
-		LOG_WRN("FUOTA log event 0x%02x not queued: %d", code, rc);
-	}
-}
-
-/*
- * The FUOTA service does not expose fragment counts or the target version
- * yet, so Event Data stays zero.
- */
 static void handle_fuota_milestones(void)
 {
-	atomic_val_t milestones = atomic_clear(&fuota_milestones);
-
-	if ((milestones & FUOTA_SESSION_STARTED) != 0) {
-		submit_fuota_event(UPLINK_LOG_EVENT_FUOTA_STARTED);
+	switch (atomic_set(&pending_drain, DRAIN_UNCHANGED)) {
+	case DRAIN_PAUSE:
 		ignore_result(uplink_log_pause_drain());
-	}
-	if ((milestones & FUOTA_FRAG_INCOMPLETE) != 0) {
-		submit_fuota_event(UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE);
-	}
-	if ((milestones & FUOTA_SESSION_ENDED) != 0) {
+		break;
+	case DRAIN_RESUME:
 		ignore_result(uplink_log_resume_drain());
+		break;
 	}
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	struct uplink_log_event record;
+	while (k_msgq_get(&fuota_reports, &record, K_NO_WAIT) == 0) {
+		int rc = uplink_log_submit_event(&record);
+		if (rc != UPLINK_LOG_OK) {
+			LOG_WRN("FUOTA log event 0x%02x not queued: %d", record.code, rc);
+		}
+	}
+#endif
 }
 
 static bool periodic_snapshot(void *user_data, struct uplink_log_periodic *out)
@@ -286,15 +335,21 @@ int main(void)
 	static const uint8_t dev_eui[] = DT_PROP(USER_NODE, user_lorawan_device_eui);
 	static const uint8_t join_eui[] = DT_PROP(USER_NODE, user_lorawan_join_eui);
 	static const uint8_t app_key[] = DT_PROP(USER_NODE, user_lorawan_app_key);
+#if DT_NODE_HAS_PROP(USER_NODE, user_lorawan_gen_app_key)
 	static const uint8_t gen_app_key[] = DT_PROP(USER_NODE, user_lorawan_gen_app_key);
+#endif
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 	static const uint8_t payload[] = "RZI FUOTA";
+#endif
 	const struct uplink_log_options log_options = {
 		.device_code = DEVICE_CODE,
 		.periodic_snapshot = periodic_snapshot,
 	};
 	enum uplink_log_reset_reason reset_reason = read_reset_reason();
 	uint32_t join_failures = 0U;
+#ifndef CONFIG_RZI_LORAWAN_FUOTA_AGENT
 	int64_t next_uplink;
+#endif
 	int rc;
 
 	LOG_INF("RZI LoRaWAN FUOTA sample %d.%d.%d.%d", FW_VERSION_MAJOR, FW_VERSION_MINOR,
@@ -329,17 +384,19 @@ int main(void)
 		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
 		return rc;
 	}
+#if DT_NODE_HAS_PROP(USER_NODE, user_lorawan_gen_app_key)
 	rc = rzi_lorawan_set_gen_app_key(gen_app_key, sizeof(gen_app_key));
 	if (rc != 0) {
 		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
 		return rc;
 	}
+#endif
 	rc = rzi_lorawan_set_activation(RZI_LORAWAN_ACTIVATION_OTAA);
 	if (rc != 0) {
 		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
 		return rc;
 	}
-	rc = rzi_lorawan_init(LORAWAN_REGION);
+	rc = rzi_lorawan_init(RZI_FUOTA_SAMPLE_REGION);
 	if (rc != 0) {
 		LOG_ERR("LoRaWAN init failed: %s", rzi_err_str(rc));
 		return rc;
@@ -355,6 +412,26 @@ int main(void)
 	LOG_INF("Joined");
 	submit_boot_report(reset_reason, join_failures);
 
+#ifdef CONFIG_RZI_LORAWAN_FUOTA_AGENT
+	/* The managed receiver schedules the periodic uplink across class changes. */
+	for (;;) {
+		handle_fuota_milestones();
+#ifdef CONFIG_APP_FUOTA_RECEIVE_DEMO
+		uint32_t generation = (uint32_t)atomic_set(&finished_generation, 0);
+
+		if (generation) {
+			rc = fuota_receive_demo_consume(generation);
+			if (rc == 0) {
+				LOG_INF("Read and released FUOTA generation %u", generation);
+			} else {
+				LOG_ERR("FUOTA consumer failed for generation %u: %s", generation,
+					rzi_err_str(rc));
+			}
+		}
+#endif
+		uplink_log_rzi_poll(UPLINK_INTERVAL_MS);
+	}
+#else
 	next_uplink = k_uptime_get();
 	for (;;) {
 		int64_t now = k_uptime_get();
@@ -370,4 +447,5 @@ int main(void)
 		handle_fuota_milestones();
 		uplink_log_rzi_poll((uint32_t)MAX(next_uplink - k_uptime_get(), 0));
 	}
+#endif
 }

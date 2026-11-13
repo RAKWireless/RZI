@@ -1,0 +1,9 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+#include "../app.overlay"
+
+/* SysTick follows MSI. Lock MSI to the board's 32.768 kHz crystal so
+ * LoRaWAN receive windows stay aligned, including the 5 s join delay.
+ */
+&clk_msi {
+	msi-pll-mode;
+};
