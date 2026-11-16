@@ -96,6 +96,19 @@ patches:
       RFO_HP/RFO_LP PA configuration, and optional RF switch GPIOs directly
       like ST's stm32wlxx_hal_subghz.c.
 
+  - path: usp_zephyr/0006-zephyr-4.5-warning-fixes.patch
+    sha256sum: 4efddffabb89bec2f54c11ffeb7356baed8d5fff92ea4c75a10e597855276eba
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-09-21
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Update for Zephyr 4.5 APIs: include zephyr/sys/clock.h instead of
+      the deprecated sys_clock.h wrapper, and replace SPI_OP_MODE_MASTER with
+      SPI_OP_MODE_CONTROLLER in the USP radio board files.
+
   - path: usp_zephyr/0007-reuse-license-annotations.patch
     sha256sum: 62eb93d0a433a78e4a8c68bd399de5a4fdbcebc6bf9d6d48af7f59e43e8c26dd
     module: usp_zephyr
