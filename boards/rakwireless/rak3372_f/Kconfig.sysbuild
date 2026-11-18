@@ -2,5 +2,5 @@
 # SPDX-License-Identifier: Apache-2.0
 
 choice MCUBOOT_MODE
-	default MCUBOOT_MODE_OVERWRITE_ONLY
+	default MCUBOOT_MODE_SWAP_SCRATCH
 endchoice
