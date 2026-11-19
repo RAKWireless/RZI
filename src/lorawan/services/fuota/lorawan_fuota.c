@@ -11,6 +11,7 @@
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/util.h>
@@ -35,6 +36,22 @@ static __maybe_unused void ignore_result(int result)
 #include <zephyr/dfu/mcuboot.h>
 #endif
 
+#if defined(CONFIG_RZI_LORAWAN_BACKEND_USP)
+#include <smtc_modem_api.h>
+
+__weak void smtc_modem_fuota_set_hooks(const struct smtc_modem_fuota_hooks *hooks)
+{
+	ARG_UNUSED(hooks);
+}
+#endif
+
+#if defined(CONFIG_RZI_LORAWAN_BACKEND_USP) && PARTITION_EXISTS(slot1_partition)
+#define FUOTA_DIRECT_SLOT 1
+#include <zephyr/drivers/flash.h>
+#else
+#define FUOTA_DIRECT_SLOT 0
+#endif
+
 LOG_MODULE_REGISTER(rzi_fuota, LOG_LEVEL_INF);
 
 #define IMAGE_MAGIC     0x96f3b83dU
@@ -55,6 +72,19 @@ static size_t expected_size;
 static int last_error;
 static struct rzi_fuota_callbacks callbacks;
 static const struct rzi_lorawan_fuota_ops *ops;
+#if FUOTA_DIRECT_SLOT
+/* SessionSetupReq bytes 52 41 4B 30, assembled little-endian by USP. */
+#define FUOTA_DESCRIPTOR_DELTA 0x304B4152U
+
+static const struct flash_area *slot;
+static size_t session_bytes;
+static size_t session_span;
+static bool slot_session;
+static bool target_upgrade;
+static bool reconstructed;
+static bool write_failed;
+static uint8_t page_buf[4096];
+#endif
 
 #if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0
 static void keepalive_work_handler(struct k_work *work);
@@ -171,19 +201,32 @@ static void cancel_keepalive_sync(void)
 }
 #endif
 
+static int read_stored(uint32_t offset, uint8_t *buffer, size_t size)
+{
+#if FUOTA_DIRECT_SLOT
+	if (slot != NULL) {
+		if ((uint64_t)offset + size > slot->fa_size) {
+			return -RZI_ERR_INVALID;
+		}
+		return rzi_err_from_errno(flash_area_read(slot, offset, buffer, size));
+	}
+#endif
+	if (ops == NULL || ops->read_image == NULL) {
+		return -RZI_ERR_NOT_SUPPORTED;
+	}
+	return ops->read_image(offset, buffer, size);
+}
+
 static void log_image_head(void)
 {
 	uint8_t prefix[IMAGE_HEAD_LOG];
 	size_t request = sizeof(prefix);
 	int rc;
 
-	if (ops == NULL || ops->read_image == NULL) {
-		return;
-	}
 	if (image_size != 0U && image_size < request) {
 		request = image_size;
 	}
-	rc = ops->read_image(0U, prefix, request);
+	rc = read_stored(0U, prefix, request);
 	if (rc != 0) {
 		LOG_WRN("FUOTA image head unread: %d", rc);
 		return;
@@ -217,10 +260,7 @@ static int detect_image_size(size_t reported)
 			return 0;
 		}
 	}
-	if (ops == NULL || ops->read_image == NULL) {
-		return -RZI_ERR_NOT_SUPPORTED;
-	}
-	rc = ops->read_image(0U, header, sizeof(header));
+	rc = read_stored(0U, header, sizeof(header));
 	if (rc != 0) {
 		return rc;
 	}
@@ -230,7 +270,7 @@ static int detect_image_size(size_t reported)
 	}
 	hdr_size = sys_get_le16(&header[8]);
 	payload_size = sys_get_le32(&header[12]);
-	rc = ops->read_image(hdr_size + payload_size, tlv, sizeof(tlv));
+	rc = read_stored(hdr_size + payload_size, tlv, sizeof(tlv));
 	if (rc != 0) {
 		return rc;
 	}
@@ -277,6 +317,319 @@ static int copy_image_to_slot(void)
 }
 #endif
 
+#if FUOTA_DIRECT_SLOT
+static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
+{
+	const struct device *flash = flash_area_get_device(slot);
+
+	while (size > 0U) {
+		struct flash_pages_info info;
+		uint32_t page_off;
+		uint32_t page_end;
+		uint32_t limit;
+		uint32_t unit;
+		uint32_t unit_off;
+		uint32_t align;
+		size_t page_index;
+		size_t count;
+		bool rewrite = false;
+		int rc = flash_get_page_info_by_offs(flash, slot->fa_off + offset, &info);
+
+		if (rc != 0 || info.size == 0U || info.start_offset < slot->fa_off) {
+			return rc == 0 ? -RZI_ERR_NO_RESOURCE : rzi_err_from_errno(rc);
+		}
+		page_off = (uint32_t)(info.start_offset - slot->fa_off);
+		if (offset < page_off || offset >= slot->fa_size) {
+			return -RZI_ERR_INVALID;
+		}
+		/* The SPI NOR layout page is 64 KB. Program in 4 KB sectors, which
+		 * this chip can erase and which fit in page_buf.
+		 */
+		unit = info.size;
+		if (unit > sizeof(page_buf)) {
+			if ((info.size % sizeof(page_buf)) != 0U) {
+				return -RZI_ERR_NO_RESOURCE;
+			}
+			unit = sizeof(page_buf);
+		}
+		page_end = page_off + info.size;
+		limit = page_end < slot->fa_size ? page_end : slot->fa_size;
+		unit_off = page_off + ((offset - page_off) / unit) * unit;
+		if ((uint64_t)unit_off + unit > limit) {
+			return -RZI_ERR_INVALID;
+		}
+		page_index = offset - unit_off;
+		count = MIN(unit - page_index, size);
+		rc = flash_area_read(slot, unit_off, page_buf, unit);
+		if (rc != 0) {
+			return rzi_err_from_errno(rc);
+		}
+		align = flash_area_align(slot);
+		if (align == 0U || (align & (align - 1U)) != 0U || align > unit) {
+			return -RZI_ERR_NO_RESOURCE;
+		}
+		{
+			uint32_t aligned = offset & ~(align - 1U);
+			uint32_t aligned_end =
+				((uint32_t)(offset + count) + align - 1U) & ~(align - 1U);
+
+			if (aligned < unit_off) {
+				aligned = unit_off;
+			}
+			if (aligned_end > unit_off + unit) {
+				aligned_end = unit_off + unit;
+			}
+			for (uint32_t i = aligned; i < aligned_end; i++) {
+				if (page_buf[i - unit_off] != 0xFFU) {
+					rewrite = true;
+					break;
+				}
+			}
+		}
+		memcpy(&page_buf[page_index], data, count);
+		if (rewrite) {
+			rc = flash_area_erase(slot, unit_off, unit);
+			if (rc == 0) {
+				rc = flash_area_write(slot, unit_off, page_buf, unit);
+			}
+		} else {
+			uint32_t start = offset & ~(align - 1U);
+			uint32_t end = (uint32_t)(offset + count + align - 1U) & ~(align - 1U);
+
+			if (end > unit_off + unit) {
+				end = unit_off + unit;
+			}
+			rc = flash_area_write(slot, start, &page_buf[start - unit_off], end - start);
+		}
+		if (rc != 0) {
+			return rzi_err_from_errno(rc);
+		}
+		offset += count;
+		data += count;
+		size -= count;
+	}
+	return 0;
+}
+
+static void finish_slot_session(void)
+{
+	bool ready;
+	bool install;
+	size_t bytes;
+	int rc;
+
+	k_mutex_lock(&lock, K_FOREVER);
+	ready = slot_session && reconstructed && !write_failed && session_bytes != 0U;
+	install = target_upgrade;
+	bytes = session_bytes;
+	k_mutex_unlock(&lock);
+
+	rc = rzi_lorawan_set_class(RZI_LORAWAN_CLASS_A);
+	if (rc != 0) {
+		LOG_WRN("FUOTA return to Class A failed: %d", rc);
+	}
+
+	k_mutex_lock(&lock, K_FOREVER);
+	if (!ready) {
+		image_ready = false;
+		last_error = -RZI_ERR_IO;
+		slot_session = false;
+		set_state_locked(RZI_FUOTA_STATE_FAILED);
+		notify_complete(-RZI_ERR_IO);
+		schedule_keepalive();
+		k_mutex_unlock(&lock);
+		return;
+	}
+	image_ready = true;
+	image_size = bytes;
+	last_error = 0;
+	LOG_INF("FUOTA image stored, %u bytes", (unsigned int)bytes);
+	log_image_head();
+	set_state_locked(RZI_FUOTA_STATE_COMPLETE);
+	notify_complete(0);
+	if (!install) {
+		slot_session = false;
+		schedule_keepalive();
+		k_mutex_unlock(&lock);
+		LOG_INF("FUOTA delta stored, upgrade not requested");
+		return;
+	}
+	k_mutex_unlock(&lock);
+	rc = rzi_fuota_apply();
+	if (rc != 0) {
+		LOG_ERR("FUOTA install failed: %d", rc);
+	}
+}
+
+static uint8_t fuota_area_for_descriptor(uint32_t descriptor, uint8_t *area_id, bool *upgrade)
+{
+	if (descriptor == 0U) {
+		*area_id = PARTITION_ID(slot1_partition);
+		*upgrade = true;
+		return 0;
+	}
+#if PARTITION_EXISTS(fuota_delta_partition)
+	if (descriptor == FUOTA_DESCRIPTOR_DELTA) {
+		*area_id = PARTITION_ID(fuota_delta_partition);
+		*upgrade = false;
+		return 0;
+	}
+#endif
+	return 0x08;
+}
+
+static uint8_t fuota_session_setup(uint32_t descriptor, uint16_t frag_nb, uint8_t frag_size,
+				   uint8_t padding)
+{
+	const struct flash_area *area = NULL;
+	const char *name;
+	uint8_t area_id;
+	uint8_t status;
+	uint32_t raw;
+	uint32_t bytes;
+	bool upgrade;
+	int rc;
+
+	if (frag_nb == 0U || frag_size == 0U || padding > frag_size) {
+		return 0x02;
+	}
+	raw = (uint32_t)frag_nb * frag_size;
+	if (padding >= raw) {
+		return 0x02;
+	}
+	bytes = raw - padding;
+	status = fuota_area_for_descriptor(descriptor, &area_id, &upgrade);
+	if (status != 0U) {
+		LOG_WRN("FUOTA descriptor 0x%08x rejected", descriptor);
+		return status;
+	}
+
+	k_mutex_lock(&lock, K_FOREVER);
+	rc = flash_area_open(area_id, &area);
+	if (rc != 0) {
+		k_mutex_unlock(&lock);
+		return 0x02;
+	}
+	if (raw > area->fa_size) {
+		flash_area_close(area);
+		k_mutex_unlock(&lock);
+		return 0x02;
+	}
+#if defined(CONFIG_RZI_POWER)
+	if (!power_flash_held && rzi_power_lock_get(RZI_POWER_LOCK_FLASH) == 0) {
+		power_flash_held = true;
+	}
+#endif
+	rc = flash_area_erase(area, 0, area->fa_size);
+	if (rc != 0) {
+		flash_area_close(area);
+		slot_session = false;
+		k_mutex_unlock(&lock);
+		LOG_ERR("FUOTA erase failed: %d", rc);
+		return 0x02;
+	}
+	if (slot != NULL) {
+		flash_area_close(slot);
+	}
+	slot = area;
+	session_bytes = bytes;
+	session_span = raw;
+	target_upgrade = upgrade;
+	slot_session = true;
+	reconstructed = false;
+	write_failed = false;
+	image_ready = false;
+	image_size = bytes;
+	k_mutex_unlock(&lock);
+	name = upgrade ? "slot1" : "fuota_delta";
+	LOG_INF("FUOTA descriptor 0x%08x -> %s, %u bytes", descriptor, name, bytes);
+	return 0;
+}
+
+static int fuota_store(uint32_t offset, const uint8_t *data, uint32_t size)
+{
+	int rc;
+
+	k_mutex_lock(&lock, K_FOREVER);
+	if (!slot_session || slot == NULL || data == NULL ||
+	    (uint64_t)offset + size > session_span) {
+		write_failed = true;
+		k_mutex_unlock(&lock);
+		return -1;
+	}
+	rc = slot_program(offset, data, size);
+	if (rc != 0) {
+		write_failed = true;
+		LOG_ERR("FUOTA flash write failed: %d", rc);
+	}
+	k_mutex_unlock(&lock);
+	return rc == 0 ? 0 : -1;
+}
+
+static int fuota_restore(uint32_t offset, uint8_t *data, uint32_t size)
+{
+	int rc;
+
+	k_mutex_lock(&lock, K_FOREVER);
+	if (!slot_session || slot == NULL || data == NULL ||
+	    (uint64_t)offset + size > slot->fa_size) {
+		k_mutex_unlock(&lock);
+		return -1;
+	}
+	rc = flash_area_read(slot, offset, data, size);
+	k_mutex_unlock(&lock);
+	return rc == 0 ? 0 : -1;
+}
+
+static void fuota_register_hooks(void)
+{
+	static const struct smtc_modem_fuota_hooks hooks = {
+		.session_setup = fuota_session_setup,
+		.store = fuota_store,
+		.restore = fuota_restore,
+	};
+
+	smtc_modem_fuota_set_hooks(&hooks);
+}
+#elif defined(CONFIG_RZI_LORAWAN_BACKEND_USP)
+static uint8_t fuota_session_setup(uint32_t descriptor, uint16_t frag_nb, uint8_t frag_size,
+				   uint8_t padding)
+{
+	ARG_UNUSED(descriptor);
+	ARG_UNUSED(frag_nb);
+	ARG_UNUSED(frag_size);
+	ARG_UNUSED(padding);
+	return 0x02;
+}
+
+static int fuota_store(uint32_t offset, const uint8_t *data, uint32_t size)
+{
+	ARG_UNUSED(offset);
+	ARG_UNUSED(data);
+	ARG_UNUSED(size);
+	return -1;
+}
+
+static int fuota_restore(uint32_t offset, uint8_t *data, uint32_t size)
+{
+	ARG_UNUSED(offset);
+	ARG_UNUSED(data);
+	ARG_UNUSED(size);
+	return -1;
+}
+
+static void fuota_register_hooks(void)
+{
+	static const struct smtc_modem_fuota_hooks hooks = {
+		.session_setup = fuota_session_setup,
+		.store = fuota_store,
+		.restore = fuota_restore,
+	};
+
+	smtc_modem_fuota_set_hooks(&hooks);
+}
+#endif
+
 static void handle_joined(void)
 {
 	int rc = 0;
@@ -307,12 +660,30 @@ static void handle_fuota_event(const struct rzi_lorawan_backend_event *event)
 		notify_session_started();
 		break;
 	case RZI_LORAWAN_BACKEND_FUOTA_SESSION_ENDED:
+#if FUOTA_DIRECT_SLOT
+		if (slot_session) {
+			k_mutex_unlock(&lock);
+			finish_slot_session();
+			k_mutex_lock(&lock, K_FOREVER);
+			break;
+		}
+#endif
 		if (state == RZI_FUOTA_STATE_TRANSFERRING && !image_ready) {
 			schedule_keepalive();
 			set_state_locked(RZI_FUOTA_STATE_READY);
 		}
 		break;
 	case RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE:
+#if FUOTA_DIRECT_SLOT
+		if (slot_session) {
+			reconstructed = event->fuota.successful;
+			if (!reconstructed) {
+				write_failed = true;
+			}
+			LOG_INF("FUOTA reconstruction %s", reconstructed ? "complete" : "failed");
+			break;
+		}
+#endif
 		if (event->fuota.successful) {
 			int rc = detect_image_size(event->fuota.image_size);
 
@@ -397,6 +768,19 @@ int rzi_fuota_get_status(struct rzi_fuota_status *status)
 	return 0;
 }
 
+bool rzi_fuota_uplink_allowed(void)
+{
+	bool allowed;
+
+	if (k_is_in_isr()) {
+		return false;
+	}
+	k_mutex_lock(&lock, K_FOREVER);
+	allowed = state != RZI_FUOTA_STATE_TRANSFERRING && state != RZI_FUOTA_STATE_APPLYING;
+	k_mutex_unlock(&lock);
+	return allowed;
+}
+
 int rzi_fuota_set_expected_size(size_t size)
 {
 	if (k_is_in_isr()) {
@@ -429,10 +813,8 @@ int rzi_fuota_read_image(size_t offset, void *buffer, size_t size)
 	k_mutex_lock(&lock, K_FOREVER);
 	if (!image_ready) {
 		rc = -RZI_ERR_NOT_FOUND;
-	} else if (ops == NULL || ops->read_image == NULL) {
-		rc = -RZI_ERR_NOT_SUPPORTED;
 	} else {
-		rc = ops->read_image((uint32_t)offset, buffer, size);
+		rc = read_stored((uint32_t)offset, buffer, size);
 	}
 	k_mutex_unlock(&lock);
 	return rc;
@@ -464,7 +846,21 @@ int rzi_fuota_apply(void)
 	k_mutex_unlock(&lock);
 	return -RZI_ERR_NOT_SUPPORTED;
 #else
-	int rc = copy_image_to_slot();
+	int rc;
+
+#if FUOTA_DIRECT_SLOT
+	if (slot != NULL && !target_upgrade) {
+		k_mutex_lock(&lock, K_FOREVER);
+		last_error = -RZI_ERR_NOT_SUPPORTED;
+		set_state_locked(RZI_FUOTA_STATE_COMPLETE);
+		k_mutex_unlock(&lock);
+		return -RZI_ERR_NOT_SUPPORTED;
+	}
+	rc = slot != NULL ? rzi_err_from_errno(boot_request_upgrade(BOOT_UPGRADE_TEST))
+			  : copy_image_to_slot();
+#else
+	rc = copy_image_to_slot();
+#endif
 
 	if (rc != 0) {
 		k_mutex_lock(&lock, K_FOREVER);
@@ -514,13 +910,16 @@ static void fuota_on_event(const struct rzi_lorawan_backend_event *event)
 
 static void fuota_on_initialized(void)
 {
+#if defined(CONFIG_RZI_LORAWAN_BACKEND_USP)
+	fuota_register_hooks();
+#endif
 	ignore_result(rzi_fuota_init());
 }
 
 static int fuota_on_stopping(void)
 {
 	k_mutex_lock(&lock, K_FOREVER);
-	if (state == RZI_FUOTA_STATE_APPLYING) {
+	if (state == RZI_FUOTA_STATE_APPLYING || state == RZI_FUOTA_STATE_TRANSFERRING) {
 		k_mutex_unlock(&lock);
 		return -RZI_ERR_BUSY;
 	}
@@ -544,6 +943,14 @@ static void fuota_on_stopped(void)
 	image_size = expected_size;
 	last_error = 0;
 	ops = NULL;
+#if FUOTA_DIRECT_SLOT
+	slot_session = false;
+	target_upgrade = false;
+	reconstructed = false;
+	write_failed = false;
+	session_bytes = 0U;
+	session_span = 0U;
+#endif
 	k_mutex_unlock(&lock);
 }
 

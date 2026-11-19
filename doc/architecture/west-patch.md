@@ -20,6 +20,7 @@ rzi/
         │   ├── 0002-ral-sx126x-frequency-limits.patch
         │   ├── 0003-user-channel-mask.patch
         │   ├── 0004-reuse-license-annotations.patch
+        │   ├── 0005-fuota-session-hooks.patch
         │   └── 0015-optional-certification-and-test-mode.patch
         ├── usp_zephyr/
         │   ├── 0005-stm32wl-subghz-radio.patch
@@ -56,6 +57,9 @@ every default channel mask (join, the post-join defaults, and the CN470
 session plan). It also makes the US915/AU915 channel rotation ignore disabled
 channels; otherwise a mask stalls the rotation. A network LinkADRReq and the
 ADR back-off still replace the mask until the next join, as LoRaWAN requires.
+`usp/0005` lets RZI register fragmentation session hooks. The v1 package
+calls the setup hook before accepting a descriptor, and stores reconstructed
+bytes through the registered read/write hooks instead of `CONTEXT_FUOTA`.
 `usp/0004` and `usp_zephyr/0007` add a `REUSE.toml` to each module so that
 `west spdx` records licenses and copyrights for Semtech sources, which carry
 the Clear BSD text without SPDX tags; see [sbom.md](../development/sbom.md).

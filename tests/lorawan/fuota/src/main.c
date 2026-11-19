@@ -216,9 +216,11 @@ ZTEST(rzi_lorawan_fuota, test_session_and_image_access)
 	fake_sink(&started);
 	wait_for(1);
 	zassert_equal(atomic_get(&stats.state), RZI_FUOTA_STATE_TRANSFERRING);
+	zassert_false(rzi_fuota_uplink_allowed());
 	fake_sink(&done);
 	wait_for(2);
 	zassert_equal(atomic_get(&stats.state), RZI_FUOTA_STATE_COMPLETE);
+	zassert_true(rzi_fuota_uplink_allowed());
 	zassert_ok(atomic_get(&stats.complete));
 	zassert_ok(rzi_fuota_get_status(&status));
 	zassert_true(status.image_ready);

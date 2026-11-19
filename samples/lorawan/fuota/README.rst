@@ -12,8 +12,11 @@ uplink every 5 seconds. The application blocks on semaphores that the event
 callback gives; callbacks only signal and print logs.
 ``rzi_lorawan_init()`` initializes FUOTA coordination when
 ``CONFIG_RZI_LORAWAN_FUOTA`` is enabled. The application registers FUOTA
-callbacks to observe session state and completion. RZI and the USP backend
-handle clock sync, Class C multicast and image reconstruction.
+callbacks to observe session state and completion, and skips its periodic
+uplink while ``rzi_fuota_uplink_allowed()`` is false. RZI and the USP backend
+handle clock sync and Class C multicast. Reconstructed bytes are written to
+the MCUboot secondary slot. When the multicast window ends, RZI returns the
+device to Class A and reboots into the test upgrade.
 
 Clock Synchronization (FPort 202), Remote Multicast Setup (FPort 200) and
 Fragmentation (FPort 201) remain inside LoRa Basics Modem.

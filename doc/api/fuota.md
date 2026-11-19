@@ -27,9 +27,14 @@ rzi_lorawan_init() -> automatic rzi_fuota_init()
   -> start ALCSync and request MAC DeviceTime
   -> periodic uplink (ChirpStack advances unicast steps from this)
   -> FPort 202 / 200 / 201 handled transparently by the backend
-  -> Class C multicast receives fragments
-  -> record the image header; state becomes COMPLETE
-  -> the application calls rzi_fuota_apply() to write slot1 and reboot
+  -> FragSessionSetupReq selects the store from the descriptor
+  -> 0x00000000 erases slot1; 0x304B4152 (bytes 52 41 4B 30, ASCII RAK0)
+     erases fuota_delta; any other value is rejected
+  -> Class C multicast writes reconstructed bytes into the selected partition
+  -> the application skips uplinks while rzi_fuota_uplink_allowed() is false
+  -> multicast window ends, the service returns the device to Class A
+  -> slot1: MCUboot test upgrade, reboot
+  -> fuota_delta: file stays in the 32 KiB partition, device stays up
 ```
 
 Provision AppKey with `rzi_lorawan_set_app_key()` and the separate
@@ -49,8 +54,10 @@ private backend join configurations.
 3. Fill the device OTAA keys: AppKey and Gen App Key.
 4. Create a FUOTA deployment:
    - Multicast group type: **Class C**
-   - Let ChirpStack compute fragment size and multicast timeout
-   - Configure fragmentation redundancy (for example 10–20%)
+   - Let ChirpStack compute fragment size and multicast timeout. EU868
+     DR2, DR3 and DR4 yield 48, 112 and 219 byte fragments
+   - Keep redundant fragments at or below 200. That is about 20% at DR4,
+     10% at DR3 and 4.5% at DR2
 5. Upload the file to send. For protocol bring-up use
    `samples/lorawan/fuota/test_payload/rzi-fuota-test.bin` (4096 bytes,
    ASCII `RZI1` at the start). That is not bootable firmware. For MCUboot
@@ -82,39 +89,36 @@ server sends FPort 203.
 
 ## Image capacity
 
-USP reconstructs fragments in `CONTEXT_FUOTA`, starting at offset 4096 in
-the selected modem-context partition. The configured fragment limit
-(200 x 100 = 20,000 bytes in this sample) is not a storage guarantee.
-The effective limit is the smaller of that configuration and the remaining
-physical context capacity. Account for any other enabled context users.
+USP writes the reassembled bytes into the partition selected by the
+fragmentation descriptor. Descriptor 0 uses the MCUboot secondary slot
+(`slot1` / `image-1`) and, after the multicast window, requests a test
+upgrade and reboots. Descriptor `0x304B4152` is the little-endian value of
+the bytes `52 41 4B 30` (ASCII `RAK0`); it uses `fuota_delta` (32 KiB at
+`0x36000` on RAK3372-F). That file is left in place and the device does not
+reboot. Any other descriptor is rejected and nothing is erased. A file
+whose fragment span exceeds the selected partition is rejected. The context
+partition is no longer the firmware image store.
 
-| Current sample target | Modem-context area | Space after the FUOTA offset |
-|---|---|---|
-| RAK4631 | Separate 8 KiB modem-context partition | At most 4 KiB |
-| RAK3372-F | Separate 8 KiB modem-context partition | At most 4 KiB |
+The decoder caps one session at `FRAG_MAX_NB` fragments of at most
+`FRAG_MAX_SIZE` bytes, and the number of lost fragments at
+`FRAG_MAX_REDUNDANCY`. The sample sets these to 4438, 242 bytes and 200
+fragments. On EU868 that accepts one 208 KiB image at DR2 (48-byte
+fragments), DR3 (112) and DR4 (219). The 200-fragment redundancy cap is
+about 20% of a DR4 session, 10% of DR3 and 4.5% of DR2; a 20% cap at DR2
+does not fit in 64 KB RAM. A slot1 upload must be a signed MCUboot image.
+After that multicast window the service requests a test upgrade and reboots
+without checking the image; the application does not call
+`rzi_fuota_apply()`. A `RAK0` upload can be any file that fits in 32 KiB.
 
-The 4096-byte protocol test file is at that context limit.
-It does not demonstrate whole-firmware capacity. Settings NVS uses
-`storage_partition` and does not share sectors with this context area.
+Without `CONFIG_IMG_MANAGER`, installation returns `-RZI_ERR_NOT_SUPPORTED`.
+`rzi_fuota_read_image()` can still read the stored bytes from the partition
+selected for that session.
 
-A whole-firmware update needs all of the following:
-
-1. Enough configured fragments for the complete signed image.
-2. A non-overlapping context area or adapted reconstruction backend with
-   enough capacity to hold that image before installation.
-3. A secondary MCUboot slot large enough for the image and required trailer.
-4. A validated signing, boot-mode, recovery, and partition-migration process.
-
-`rzi_fuota_apply()` reads the already-reconstructed image through backend
-`read_image`, copies it to slot1 using `flash_img`, requests an upgrade, and
-reboots. Enabling MCUboot or IMG_MANAGER does not increase the reconstruction
-area. Without IMG_MANAGER, apply returns NOT_SUPPORTED; read_image remains
-available where the backend supports it.
-
-Standard RAK3172 is single-slot and cannot select FUOTA with MCUboot.
-RAK3372-F places `image-1` on the on-module MX25L400 (208 KiB, same size
-as `image-0`), but its current 4 KiB reconstruction space cannot hold a
-full image.
+`rak3172/stm32wle5xx/rzi` is single-slot (no `image-1`), so
+`CONFIG_RZI_LORAWAN_FUOTA` cannot be selected. `rak3372_f` places
+`image-1` on the on-module MX25L400 (208 KiB, same size as `image-0`).
+MCUboot mode is overwrite. A whole-image upgrade still needs a fragment
+count large enough for that slot.
 
 RAK3372-F previously used 200 KiB then 192 KiB image slots. A bootloader
 built for an older layout is not compatible with a 208 KiB update because
@@ -132,6 +136,7 @@ See `include/rzi/lorawan/fuota.h`:
 - `rzi_fuota_set_expected_size()` (optional override; the backend reports
   reassembly length, and MCUboot images are measured automatically)
 - `rzi_fuota_read_image()`
-- `rzi_fuota_apply()`
+- `rzi_fuota_uplink_allowed()`
+- `rzi_fuota_apply()` (used by the service after a reconstructed session)
 
 Reference sample: `samples/lorawan/fuota`.

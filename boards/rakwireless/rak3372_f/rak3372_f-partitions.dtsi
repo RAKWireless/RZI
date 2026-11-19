@@ -8,8 +8,8 @@
  * NOR holds a 208K slot1, an 8 KiB scratch area (two 4 KiB sectors), a
  * 32 KiB FUOTA delta area, then 8 KiB settings and 8 KiB LoRaWAN context.
  * MCUboot swaps the slots through scratch. An unconfirmed test image
- * reverts on the next boot. LoRaWAN FUOTA writes the signed image to
- * image-1.
+ * reverts on the next boot. FUOTA descriptor 0 writes the signed image to
+ * image-1. Descriptor 0x304B4152 (ASCII RAK0) writes fuota_delta.
  */
 
 / {
@@ -60,7 +60,9 @@
 			reg = <0x00034000 DT_SIZE_K(8)>;
 		};
 
-		/* Reassembly space for a FUOTA delta. Not consumed by the current apply path. */
+		/* Descriptor 0x304B4152 (ASCII RAK0) writes a FUOTA delta here.
+		 * The apply path does not install this partition.
+		 */
 		fuota_delta_partition: partition@36000 {
 			label = "fuota_delta";
 			reg = <0x00036000 DT_SIZE_K(32)>;

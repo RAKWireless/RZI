@@ -22,8 +22,12 @@ extern "C" {
  *  @brief Backend-independent firmware-update coordination for ChirpStack.
  *
  *  LoRaWAN Clock Synchronization, Remote Multicast Setup and Fragmentation
- *  remain inside the selected backend. This service owns session state,
- *  image access, optional MCUboot installation and reboot.
+ *  remain inside the selected backend. On USP the fragmentation descriptor
+ *  selects the store. Descriptor 0 writes the MCUboot secondary slot; after
+ *  the multicast window the service returns the device to Class A, requests
+ *  a test upgrade and reboots. Descriptor 0x304B4152 (bytes 52 41 4B 30,
+ *  ASCII RAK0) writes the fuota_delta partition and leaves the device
+ *  running. Any other descriptor is rejected. The image is not checked here.
  *
  *  @since 0.1.0
  *  @version 0.1.0
@@ -121,6 +125,19 @@ __must_check int rzi_fuota_init(void);
 __must_check int rzi_fuota_get_status(struct rzi_fuota_status *status);
 
 /**
+ * @brief Report whether an application uplink may be sent.
+ *
+ * Returns false while a multicast fragment window is open and while an
+ * upgrade reboot is being requested.
+ *
+ * @retval true Application uplinks may be sent.
+ * @retval false A FUOTA window or installation owns the radio.
+ *
+ * @note Thread context only.
+ */
+bool rzi_fuota_uplink_allowed(void);
+
+/**
  * @brief Optionally override the reconstructed image size in bytes.
  *
  * The service prefers the size reported by the backend, then an MCUboot
@@ -155,11 +172,13 @@ __must_check int rzi_fuota_set_expected_size(size_t size);
 __must_check int rzi_fuota_read_image(size_t offset, void *buffer, size_t size);
 
 /**
- * @brief Install the reconstructed image and reboot.
+ * @brief Request a MCUboot test upgrade and reboot.
  *
- * When MCUboot image management is enabled the image is copied into the
- * secondary slot and a test upgrade is requested. The function does not
- * return on a successful reboot.
+ * On USP a descriptor 0 image is already in the secondary slot. This writes
+ * the upgrade trailer and reboots. The service calls it after the multicast
+ * window when that reconstruction succeeded. A delta session does not call
+ * this; calling it then returns -RZI_ERR_NOT_SUPPORTED. The function does
+ * not return on a successful reboot.
  *
  * @retval -RZI_ERR_NOT_FOUND No reconstructed image is available.
  * @retval -RZI_ERR_NO_DATA The image size is unknown.

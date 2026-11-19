@@ -1,0 +1,95 @@
+diff --git a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h b/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
+--- a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
++++ b/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
+@@ -2275,6 +2275,30 @@ smtc_modem_return_code_t smtc_modem_debug_connect_with_abp( uint8_t stack_id, uint32_t dev_addr,
+                                                             uint8_t nwk_skey[SMTC_MODEM_KEY_LENGTH],
+                                                             uint8_t app_skey[SMTC_MODEM_KEY_LENGTH] );
+ 
++/**
++ * @brief Application hooks for a v1 fragmentation session
++ *
++ * @remark session_setup runs before the decoder starts. Return 0 to accept the
++ *         session. 0x02 means not enough memory and 0x08 means the descriptor
++ *         was rejected; both bits are copied into FragSessionSetupAns.
++ *         store and restore replace CONTEXT_FUOTA for the reconstructed bytes.
++ *         All three run on the modem thread and must not call the modem API.
++ */
++struct smtc_modem_fuota_hooks
++{
++    uint8_t ( *session_setup )( uint32_t descriptor, uint16_t frag_nb, uint8_t frag_size, uint8_t padding );
++    int ( *store )( uint32_t offset, const uint8_t* data, uint32_t size );
++    int ( *restore )( uint32_t offset, uint8_t* data, uint32_t size );
++};
++
++/**
++ * @brief Register fragmentation session hooks
++ *
++ * @param [in] hooks Hook table, or NULL to restore CONTEXT_FUOTA storage.
++ *                   The pointer is kept, so the table must stay valid.
++ */
++void smtc_modem_fuota_set_hooks( const struct smtc_modem_fuota_hooks* hooks );
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+index 9391d6c..e0d2f0c 100644
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
+@@ -52,6 +52,14 @@
+ #include "lr1mac_defs.h"
+ #include "lorawan_fragmentation_package.h"
+ #include "fragmentation_helper_v1.0.0.h"
++#include "smtc_modem_api.h"
++
++static const struct smtc_modem_fuota_hooks* fuota_hooks;
++
++void smtc_modem_fuota_set_hooks( const struct smtc_modem_fuota_hooks* hooks )
++{
++    fuota_hooks = hooks;
++}
+ 
+ /*
+  * -----------------------------------------------------------------------------
+@@ -608,10 +616,16 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+                 status |= 0x04;  // frag_session index not supported
+             }
+ 
+-            // Descriptor is not really defined in the specification
+-            // Not clear how to handle this.
+-            // Currently the descriptor is always correct
+-            if( frag_session_data_tmp.frag_group_data.descriptor != 0x01020304 )
++            // Descriptor is not really defined in the specification.
++            // A registered hook decides whether this session can be stored.
++            if( ( fuota_hooks != NULL ) && ( fuota_hooks->session_setup != NULL ) )
++            {
++                status |= fuota_hooks->session_setup( frag_session_data_tmp.frag_group_data.descriptor,
++                                                      frag_session_data_tmp.frag_group_data.frag_nb,
++                                                      frag_session_data_tmp.frag_group_data.frag_size,
++                                                      frag_session_data_tmp.frag_group_data.padding );
++            }
++            else if( frag_session_data_tmp.frag_group_data.descriptor != 0x01020304 )
+             {
+                 // status |= 0x08; // Wrong Descriptor
+             }
+@@ -796,12 +810,20 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+ 
+ static int8_t frag_decoder_write( uint32_t addr, uint8_t* data, uint32_t size )
+ {
++    if( ( fuota_hooks != NULL ) && ( fuota_hooks->store != NULL ) )
++    {
++        return ( fuota_hooks->store( addr, data, size ) == 0 ) ? 0 : -1;
++    }
+     smtc_modem_hal_context_store( CONTEXT_FUOTA, addr, data, size );
+     return 0;
+ }
+ 
+ static int8_t frag_decoder_read( uint32_t addr, uint8_t* data, uint32_t size )
+ {
++    if( ( fuota_hooks != NULL ) && ( fuota_hooks->restore != NULL ) )
++    {
++        return ( fuota_hooks->restore( addr, data, size ) == 0 ) ? 0 : -1;
++    }
+     smtc_modem_hal_context_restore( CONTEXT_FUOTA, addr, data, size );
+     return 0;
+ }

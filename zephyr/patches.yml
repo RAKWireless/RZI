@@ -62,6 +62,20 @@ patches:
       tags; base64 is BSD-3-Clause, and the Gladman AES and Casado/Tsigas CMAC
       files get LicenseRef identifiers for the texts kept in LICENSES.txt.
 
+  - path: usp/0005-fuota-session-hooks.patch
+    sha256sum: 2c4f7a13724fd26b8ac418e6376d91fb6707ae50c634bcb9f0ad463225eb02a4
+    module: usp
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-18
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Let RZI register v1 fragmentation hooks. session_setup runs before the
+      decoder starts, and store/restore replace CONTEXT_FUOTA for the
+      reconstructed bytes. Without hooks the package keeps its previous
+      behavior.
+
   - path: usp/0015-optional-certification-and-test-mode.patch
     sha256sum: 4edcbc0786fef38b2e332bfeef13d352e762a59225085ba087f236757f5ac9a4
     module: usp

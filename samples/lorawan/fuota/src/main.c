@@ -360,10 +360,12 @@ int main(void)
 		int64_t now = k_uptime_get();
 
 		if (now >= next_uplink) {
-			rc = rzi_lorawan_send(1, payload, sizeof(payload) - 1,
-					      RZI_LORAWAN_MSG_UNCONFIRMED);
-			if (rc != 0 && rc != -RZI_ERR_BUSY) {
-				LOG_WRN("Uplink rejected: %s", rzi_err_str(rc));
+			if (rzi_fuota_uplink_allowed()) {
+				rc = rzi_lorawan_send(1, payload, sizeof(payload) - 1,
+						      RZI_LORAWAN_MSG_UNCONFIRMED);
+				if (rc != 0 && rc != -RZI_ERR_BUSY) {
+					LOG_WRN("Uplink rejected: %s", rzi_err_str(rc));
+				}
 			}
 			next_uplink = now + UPLINK_INTERVAL_MS;
 		}
