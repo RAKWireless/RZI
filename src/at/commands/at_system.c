@@ -14,6 +14,11 @@
 #include <zephyr/sys/reboot.h>
 #include <zephyr/sys/util.h>
 
+#if defined(CONFIG_PM) && defined(CONFIG_SOC_SERIES_STM32WLX)
+#include <zephyr/init.h>
+#include <zephyr/pm/policy.h>
+#endif
+
 #if defined(CONFIG_HWINFO)
 #include <zephyr/drivers/hwinfo.h>
 #endif
@@ -75,6 +80,43 @@ int rzi_at_lora_register(void);
 static char alias_name[ALIAS_MAX + 1U];
 static char serial_number[SN_MAX + 1U];
 static uint8_t lpm_level = 1U;
+
+#if defined(CONFIG_PM) && defined(CONFIG_SOC_SERIES_STM32WLX)
+/* stm32wl.dtsi: stop1 is substate 2, stop2 is substate 3. */
+#define STM32WL_STOP1_SUBSTATE 2U
+#define STM32WL_STOP2_SUBSTATE 3U
+
+static bool stop1_locked;
+static bool stop2_locked;
+
+static void stm32wl_stop_lock(uint8_t substate_id, bool *locked, bool lock)
+{
+	if (lock == *locked) {
+		return;
+	}
+	if (lock) {
+		pm_policy_state_lock_get(PM_STATE_SUSPEND_TO_IDLE, substate_id);
+	} else {
+		pm_policy_state_lock_put(PM_STATE_SUSPEND_TO_IDLE, substate_id);
+	}
+	*locked = lock;
+}
+
+/* Level 1 keeps only STOP1. Level 2 keeps only STOP2. */
+static void stm32wl_apply_lpm_level(uint8_t level)
+{
+	stm32wl_stop_lock(STM32WL_STOP1_SUBSTATE, &stop1_locked, level != 1U);
+	stm32wl_stop_lock(STM32WL_STOP2_SUBSTATE, &stop2_locked, level != 2U);
+}
+
+static int stm32wl_lpm_level_init(void)
+{
+	stm32wl_apply_lpm_level(lpm_level);
+	return 0;
+}
+
+SYS_INIT(stm32wl_lpm_level_init, APPLICATION, 0);
+#endif
 
 static int load_string(const char *key, char *dst, size_t max_len)
 {
@@ -395,6 +437,9 @@ static int handle_lpmlvl(const struct rzi_at_request *request, void *user_data)
 	} else {
 		return -RZI_ERR_INVALID;
 	}
+#if defined(CONFIG_PM) && defined(CONFIG_SOC_SERIES_STM32WLX)
+	stm32wl_apply_lpm_level(lpm_level);
+#endif
 	return rzi_at_respond_status(RZI_AT_STATUS_OK);
 }
 
@@ -566,7 +611,7 @@ static const struct rzi_at_command commands[] = {
 	},
 	{
 		.name = RZI_ATCMD_LPMLVL,
-		.help = "get or set the sleep level for low power mode",
+		.help = "get or set the low power mode level",
 		.allowed_operations = RZI_AT_ALLOW_READ | RZI_AT_ALLOW_WRITE,
 		.handler = handle_lpmlvl,
 	},

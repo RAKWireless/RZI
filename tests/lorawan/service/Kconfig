@@ -2,10 +2,3 @@
 # SPDX-License-Identifier: Apache-2.0
 
 source "Kconfig.zephyr"
-
-config RZI_LORAWAN_TEST_FAKE_SUPPORTS_ABP
-	bool "Service test fake accepts ABP"
-	default y
-	help
-	  The default matches USP and Zephyr. The no_abp scenario turns this
-	  off so set_activation(ABP) returns -RZI_ERR_NOT_SUPPORTED.

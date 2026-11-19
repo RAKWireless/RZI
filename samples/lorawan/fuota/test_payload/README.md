@@ -1,18 +1,22 @@
-# ChirpStack FUOTA 测试文件
+# ChirpStack FUOTA test payload
 
-`rzi-fuota-test.bin`：4096 字节，小于当前 sample 的 20 KB 上限。
+The 4096-byte rzi-fuota-test.bin verifies protocol transfer, not firmware
+installation. It fits the current RAK3372-F reconstruction area exactly;
+the configured 20,000-byte fragment limit is not the physical storage limit.
+See [FUOTA capacity](../../../../doc/api/fuota.md#image-capacity).
 
-| 偏移 | 内容 |
-|------|------|
-| 0–3 | ASCII `RZI1` |
-| 4–7 | 小端长度 `4096` |
-| 8 起 | `ChirpStack FUOTA test payload for RZI` |
+| Offset | Content |
+|---|---|
+| 0-3 | ASCII RZI1 |
+| 4-7 | Little-endian length 4096 |
+| 8 onward | ChirpStack FUOTA test payload for RZI |
 
-在 ChirpStack FUOTA deployment 里上传这个文件，不要传完整应用固件。
-成功后看 `rzi_fuota` 日志里的 `FUOTA image head`，开头应为 `52 5a 49 31`（`RZI1`）。
+Upload this file to a ChirpStack FUOTA deployment for protocol bring-up.
+It is not a bootable image. After reconstruction, the rzi_fuota log
+prints FUOTA image head beginning with 52 5a 49 31 (RZI1).
 
-重新生成：
+Regenerate from the repository root:
 
-```bash
+```sh
 python3 samples/lorawan/fuota/test_payload/gen_test_bin.py
 ```

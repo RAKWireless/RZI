@@ -1,0 +1,22 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#include "stm32wl_low_power.dtsi"
+
+/* HSI16 clocks 115200 and wakes the CPU from STOP2. LSE cannot. */
+&clk_hsi {
+	status = "okay";
+};
+
+/* AT+LPMLVL=1 locks out STOP2. AT+LPMLVL=2 locks out STOP1. */
+&cpu0 {
+	cpu-power-states = <&stop1 &stop2>;
+};
+
+&lpuart1 {
+	clocks = <&rcc STM32_CLOCK(APB1_2, 0)>,
+		 <&rcc STM32_SRC_HSI LPUART1_SEL(2)>;
+	current-speed = <115200>;
+	wakeup-source;
+	fifo-enable;
+};

@@ -1,0 +1,82 @@
+diff --git a/modules/lora_basics_modem/common.cmake b/modules/lora_basics_modem/common.cmake
+index babb6d1..c0a6615 100644
+--- a/modules/lora_basics_modem/common.cmake
++++ b/modules/lora_basics_modem/common.cmake
+@@ -47,6 +47,8 @@ target_compile_definitions(lbm_compile_definitions INTERFACE
+   $<$<BOOL:${CONFIG_LORA_BASICS_MODEM_RELAY_TX}>:USE_RELAY_TX>
+   $<$<BOOL:${CONFIG_LORA_BASICS_MODEM_PERF_TEST}>:PERF_TEST_ENABLED>
+   $<$<BOOL:${CONFIG_LORA_BASICS_MODEM_DISABLE_JOIN_DUTY_CYCLE}>:TEST_BYPASS_JOIN_DUTY_CYCLE>
++  $<$<BOOL:${CONFIG_LORA_BASICS_MODEM_CERTIFICATION}>:ADD_LBM_CERTIFICATION>
++  $<$<BOOL:${CONFIG_LORA_BASICS_MODEM_TEST_MODE}>:ADD_LBM_TEST_MODE>
+ )
+ 
+ # FUOTA definitions with values (cannot use generator expressions for value assignment)
+@@ -100,18 +102,22 @@ add_library(lbm::definitions ALIAS lbm_compile_definitions)
+ zephyr_library_sources(
+   ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_api/lorawan_api.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/smtc_modem.c
+-  ${LBM_SMTC_MODEM_CORE_DIR}/smtc_modem_test.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/modem_utilities/modem_event_utilities.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/modem_utilities/fifo_ctrl.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/modem_utilities/modem_core.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/modem_supervisor/modem_supervisor_light.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/modem_supervisor/modem_tx_protocol_manager.c
+-  ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_packages/lorawan_certification/lorawan_certification.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_manager/lorawan_join_management.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_manager/lorawan_send_management.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_manager/lorawan_cid_request_management.c
+   ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_manager/lorawan_dwn_ack_management.c
+ )
++zephyr_library_sources_ifdef(CONFIG_LORA_BASICS_MODEM_TEST_MODE
++  ${LBM_SMTC_MODEM_CORE_DIR}/smtc_modem_test.c
++)
++zephyr_library_sources_ifdef(CONFIG_LORA_BASICS_MODEM_CERTIFICATION
++  ${LBM_SMTC_MODEM_CORE_DIR}/lorawan_packages/lorawan_certification/lorawan_certification.c
++)
+ 
+ # LR1MAC_C_SOURCES
+ zephyr_library_sources(
+diff --git a/subsys/lbm/Kconfig b/subsys/lbm/Kconfig
+index 57e182b..931f0ab 100644
+--- a/subsys/lbm/Kconfig
++++ b/subsys/lbm/Kconfig
+@@ -155,6 +155,20 @@ config LORA_BASICS_MODEM_CSMA_BY_DEFAULT
+ 	default n
+ 	depends on LORA_BASICS_MODEM_CSMA
+ 
++config LORA_BASICS_MODEM_CERTIFICATION
++	bool "LoRaWAN certification package"
++	default y
++	help
++	  Build the LoRaWAN certification package. Without it,
++	  smtc_modem_set_certification_mode() cannot enable certification
++	  mode.
++
++config LORA_BASICS_MODEM_TEST_MODE
++	bool "Test mode"
++	default y
++	help
++	  Build the smtc_modem_test_*() API for radio tests.
++
+ #-----------------------------------------------------------------------------
+ # LoRaWAN Package related options
+ #-----------------------------------------------------------------------------
+diff --git a/subsys/usp/smtc_modem_helper.c b/subsys/usp/smtc_modem_helper.c
+index 76baace..2d99966 100644
+--- a/subsys/usp/smtc_modem_helper.c
++++ b/subsys/usp/smtc_modem_helper.c
+@@ -407,6 +407,7 @@ __weak void modem_event_callback( void )
+             {
+                 LOG_DBG( "Event received: TEST_MODE :  %s\n", status_name[status_test_mode] );
+             }
++#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
+             if( status_test_mode == SMTC_MODEM_EVENT_TEST_MODE_RX_DONE )
+             {
+                 int16_t rssi;
+@@ -416,5 +417,6 @@ __weak void modem_event_callback( void )
+                 LOG_HEXDUMP_DBG( rx_payload, rx_payload_length, "rx_payload" );
+                 LOG_INF( "rssi: %d, snr: %d\n", rssi, snr );
+             }
++#endif
+             break;
+         }

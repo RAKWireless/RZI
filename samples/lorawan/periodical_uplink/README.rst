@@ -163,7 +163,7 @@ For RAK3172-F on the RAK3372-F carrier, use
 
 Flash ``build/merged_<board>.hex``, for example
 ``build/merged_rak4631_nrf52840_rzi.hex``. It contains MCUboot and the signed
-application. ``zephyr.hex`` alone has no bootloader. See ``doc/boot.md``.
+application. ``zephyr.hex`` alone has no bootloader. See ``doc/architecture/boot.md``.
 
 Low-power variant
 =================

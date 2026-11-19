@@ -1,11 +1,110 @@
-diff --git a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
---- a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
-+++ b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
-@@ -84,6 +84,7 @@
- #define SMTC_LOG( log_fn, ... )                                        \
+diff --git a/include/zephyr/usp/smtc_hal_dbg_trace.h b/include/zephyr/usp/smtc_hal_dbg_trace.h
+index 967abe5..73bfef1 100644
+--- a/include/zephyr/usp/smtc_hal_dbg_trace.h
++++ b/include/zephyr/usp/smtc_hal_dbg_trace.h
+@@ -66,20 +66,21 @@ void smtc_str_trim_end( char* text );
+  * @brief This macro matches the Semtech LBM logging macros with the logging
+  * macros LOG_* from zephyr, while trimming the endlines present in LBM.
+  */
+-#define SMTC_LOG( log_fn, ... )                                        \
++#define SMTC_LOG( level, log_fn, ... )                                 \
      do                                                                 \
      {                                                                  \
-+        if( !IS_ENABLED( CONFIG_LOG ) ) { break; }                      \
++        if( !Z_LOG_CONST_LEVEL_CHECK( level ) ) { break; }             \
          char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
          snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
          smtc_str_trim_end( __log_buffer );                             \
+         log_fn( "%s", __log_buffer );                                  \
+     } while( 0 )
+
+-#define SMTC_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_INF, "%s", msg );
+-#define SMTC_HAL_TRACE_PRINTF( ... ) SMTC_LOG( LOG_INF, __VA_ARGS__ );
+-#define SMTC_HAL_TRACE_INFO( ... ) SMTC_LOG( LOG_INF, __VA_ARGS__ )
+-#define SMTC_HAL_TRACE_WARNING( ... ) SMTC_LOG( LOG_WRN, __VA_ARGS__ );
+-#define SMTC_HAL_TRACE_ERROR( ... ) SMTC_LOG( LOG_ERR, __VA_ARGS__ );
++#define SMTC_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, "%s", msg );
++#define SMTC_HAL_TRACE_PRINTF( ... ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, __VA_ARGS__ );
++#define SMTC_HAL_TRACE_INFO( ... ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, __VA_ARGS__ )
++#define SMTC_HAL_TRACE_WARNING( ... ) SMTC_LOG( LOG_LEVEL_WRN, LOG_WRN, __VA_ARGS__ );
++#define SMTC_HAL_TRACE_ERROR( ... ) SMTC_LOG( LOG_LEVEL_ERR, LOG_ERR, __VA_ARGS__ );
+ #define SMTC_HAL_TRACE_ARRAY( msg, array, len ) LOG_HEXDUMP_INF( array, len, msg );
+ #define SMTC_HAL_TRACE_PACKARRAY( msg, array, len ) LOG_HEXDUMP_INF( array, len, msg );
+
+diff --git a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+index 9057391..290814e 100644
+--- a/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
++++ b/modules/smtc_modem_hal/smtc_modem_hal_dbg_trace.h
+@@ -81,9 +81,10 @@ void smtc_str_trim_end( char* text );
+  * @brief This macro matches the Semtech LBM logging macros with the logging
+  * macros LOG_* from zephyr, while trimming the endlines present in LBM.
+  */
+-#define SMTC_LOG( log_fn, ... )                                        \
++#define SMTC_LOG( level, log_fn, ... )                                 \
+     do                                                                 \
+     {                                                                  \
++        if( !Z_LOG_CONST_LEVEL_CHECK( level ) ) { break; }             \
+         char __log_buffer[SMTC_PRINT_BUFFER_SIZE];                     \
+         snprintf( __log_buffer, SMTC_PRINT_BUFFER_SIZE, __VA_ARGS__ ); \
+         smtc_str_trim_end( __log_buffer );                             \
+@@ -102,11 +103,11 @@ void smtc_str_trim_end( char* text );
+ #define MODEM_HAL_DBG_TRACE_COLOR_WHITE ""
+ #define MODEM_HAL_DBG_TRACE_COLOR_DEFAULT ""
+
+-#define SMTC_MODEM_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_INF, "%s", msg );
+-#define SMTC_MODEM_HAL_TRACE_PRINTF( ... ) SMTC_LOG( LOG_INF, __VA_ARGS__ );
+-#define SMTC_MODEM_HAL_TRACE_INFO( ... ) SMTC_LOG( LOG_INF, __VA_ARGS__ )
+-#define SMTC_MODEM_HAL_TRACE_WARNING( ... ) SMTC_LOG( LOG_WRN, __VA_ARGS__ );
+-#define SMTC_MODEM_HAL_TRACE_ERROR( ... ) SMTC_LOG( LOG_ERR, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_MSG( msg ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, "%s", msg );
++#define SMTC_MODEM_HAL_TRACE_PRINTF( ... ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_INFO( ... ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, __VA_ARGS__ )
++#define SMTC_MODEM_HAL_TRACE_WARNING( ... ) SMTC_LOG( LOG_LEVEL_WRN, LOG_WRN, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_ERROR( ... ) SMTC_LOG( LOG_LEVEL_ERR, LOG_ERR, __VA_ARGS__ );
+ #define SMTC_MODEM_HAL_TRACE_ARRAY( msg, array, len ) LOG_HEXDUMP_INF( array, len, msg );
+ #define SMTC_MODEM_HAL_TRACE_PACKARRAY( msg, array, len ) LOG_HEXDUMP_INF( array, len, msg );
+
+@@ -115,12 +116,12 @@ void smtc_str_trim_end( char* text );
+ #define MODEM_HAL_DEEP_DBG_TRACE MODEM_HAL_FEATURE_ON
+
+ /* Deep debug trace default definitions*/
+-#define SMTC_MODEM_HAL_TRACE_PRINTF_DEBUG( ... ) SMTC_LOG( LOG_DBG, __VA_ARGS__ );
+-#define SMTC_MODEM_HAL_TRACE_MSG_DEBUG( msg ) SMTC_LOG( LOG_DBG, "%s", msg );
+-#define SMTC_MODEM_HAL_TRACE_MSG_COLOR_DEBUG( msg, color ) SMTC_LOG( LOG_DBG, "%s", msg );
+-#define SMTC_MODEM_HAL_TRACE_INFO_DEBUG( ... ) SMTC_LOG( LOG_INF, __VA_ARGS__ );
+-#define SMTC_MODEM_HAL_TRACE_WARNING_DEBUG( ... ) SMTC_LOG( LOG_WRN, __VA_ARGS__ );
+-#define SMTC_MODEM_HAL_TRACE_ERROR_DEBUG( ... ) SMTC_LOG( LOG_ERR, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_PRINTF_DEBUG( ... ) SMTC_LOG( LOG_LEVEL_DBG, LOG_DBG, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_MSG_DEBUG( msg ) SMTC_LOG( LOG_LEVEL_DBG, LOG_DBG, "%s", msg );
++#define SMTC_MODEM_HAL_TRACE_MSG_COLOR_DEBUG( msg, color ) SMTC_LOG( LOG_LEVEL_DBG, LOG_DBG, "%s", msg );
++#define SMTC_MODEM_HAL_TRACE_INFO_DEBUG( ... ) SMTC_LOG( LOG_LEVEL_INF, LOG_INF, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_WARNING_DEBUG( ... ) SMTC_LOG( LOG_LEVEL_WRN, LOG_WRN, __VA_ARGS__ );
++#define SMTC_MODEM_HAL_TRACE_ERROR_DEBUG( ... ) SMTC_LOG( LOG_LEVEL_ERR, LOG_ERR, __VA_ARGS__ );
+ #define SMTC_MODEM_HAL_TRACE_ARRAY_DEBUG( msg, array, len ) LOG_HEXDUMP_DBG( array, len, msg );
+ #define SMTC_MODEM_HAL_TRACE_PACKARRAY_DEBUG( msg, array, len ) LOG_HEXDUMP_DBG( array, len, msg );
+
+diff --git a/subsys/usp/smtc_modem_helper.c b/subsys/usp/smtc_modem_helper.c
+index 2a3a357..76baace 100644
+--- a/subsys/usp/smtc_modem_helper.c
++++ b/subsys/usp/smtc_modem_helper.c
+@@ -48,7 +48,7 @@
+
+ #include "smtc_modem_helper.h"
+
+-LOG_MODULE_REGISTER( smtc_modem_helper, LOG_LEVEL_INF );
++LOG_MODULE_REGISTER( smtc_modem_helper, CONFIG_USP_LOG_LEVEL );
+
+ /*
+  * -----------------------------------------------------------------------------
+diff --git a/subsys/usp/smtc_sw_platform_helper.c b/subsys/usp/smtc_sw_platform_helper.c
+index e3e2fc8..a2a68a4 100644
+--- a/subsys/usp/smtc_sw_platform_helper.c
++++ b/subsys/usp/smtc_sw_platform_helper.c
+@@ -77,7 +77,7 @@
+  * -----------------------------------------------------------------------------
+  * --- PRIVATE VARIABLES -------------------------------------------------------
+  */
+-LOG_MODULE_REGISTER( usp, LOG_LEVEL_INF );
++LOG_MODULE_REGISTER( usp, CONFIG_USP_LOG_LEVEL );
+
+ // If USP/RAC thread is not used, the transceiver has to be initialized
+ #if !defined( CONFIG_USP_MAIN_THREAD )

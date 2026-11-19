@@ -684,7 +684,6 @@ static int zephyr_is_joined(bool *is_joined)
 
 const struct rzi_lorawan_backend_api rzi_lorawan_backend = {
 	.capabilities = ZEPHYR_CAPABILITIES,
-	.supports_abp = true,
 	.base.init = zephyr_init,
 	.base.join = zephyr_join,
 	.base.leave = zephyr_leave,

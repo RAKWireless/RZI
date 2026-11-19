@@ -8,6 +8,7 @@
 #include <zephyr/ztest.h>
 
 #include <rzi/at/at.h>
+#include "../../../../src/at/at_priv.h"
 #if defined(CONFIG_RZI_POWER)
 #include <rzi/power/power.h>
 #ifdef CONFIG_PM
@@ -102,14 +103,28 @@ static void send_command_until(const char *command, const char *expected)
 	}
 }
 
+static K_SEM_DEFINE(startup_processed, 0, 1);
+
+static void process_startup(void)
+{
+	k_sem_give(&startup_processed);
+}
+
 static void *setup(void)
 {
 	static const struct rzi_at_io io = {
 		.write = io_write,
 	};
 
+	static const struct rzi_at_extension startup = {
+		.process = process_startup,
+	};
+
+	zassert_ok(rzi_at_registry_add_extension(&startup));
 	zassert_ok(rzi_at_register(&custom_command, 1));
 	zassert_ok(rzi_at_init(&io));
+	zassert_ok(k_sem_take(&startup_processed, K_SECONDS(1)),
+		   "Extensions must run before the first serial input");
 #if defined(CONFIG_RZI_POWER)
 	/* Read native PM support before any test takes a runtime-switch lock. */
 	send_command_until("AT+LPM=?\r",
@@ -234,5 +249,50 @@ ZTEST(rzi_at_framework, test_p2p_and_radio_test_commands)
 	send_command_until("AT+CW=868000000:14:100\r", "\r\nOK\r\n");
 }
 #endif
+
+/* A deferred completion woken by rzi_at_wake() must run with no UART input. */
+static atomic_t deferred_ready;
+static K_SEM_DEFINE(deferred_done, 0, 1);
+
+static void deferred_timer_expiry(struct k_timer *timer)
+{
+	ARG_UNUSED(timer);
+	atomic_set(&deferred_ready, 1);
+	rzi_at_wake();
+}
+
+static K_TIMER_DEFINE(deferred_timer, deferred_timer_expiry, NULL);
+
+static void deferred_process(void)
+{
+	if (atomic_cas(&deferred_ready, 1, 0)) {
+		k_sem_give(&deferred_done);
+	}
+}
+
+static int handle_deferred(const struct rzi_at_request *request, void *user_data)
+{
+	ARG_UNUSED(request);
+	ARG_UNUSED(user_data);
+	k_timer_start(&deferred_timer, K_MSEC(30), K_NO_WAIT);
+	return rzi_at_respond_status(RZI_AT_STATUS_OK);
+}
+
+ZTEST(rzi_at_framework, test_deferred_processing_without_next_uart_byte)
+{
+	static const struct rzi_at_extension ext = {
+		.process = deferred_process,
+	};
+	static const struct rzi_at_command command = {
+		.name = "DEFERRED",
+		.allowed_operations = RZI_AT_ALLOW_RUN,
+		.handler = handle_deferred,
+	};
+
+	zassert_ok(rzi_at_registry_add_extension(&ext));
+	zassert_ok(rzi_at_register(&command, 1));
+	send_command_until("AT+DEFERRED\r", "\r\nOK\r\n");
+	zassert_ok(k_sem_take(&deferred_done, K_SECONDS(1)));
+}
 
 ZTEST_SUITE(rzi_at_framework, NULL, setup, NULL, NULL, NULL);

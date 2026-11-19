@@ -22,10 +22,13 @@ zephyr_library_sources_ifdef(
   backend/usp/lorawan_backend_usp_class_b.c
   backend/usp/lorawan_backend_usp_mac.c
   backend/usp/lorawan_backend_usp_multicast.c
-  backend/usp/lorawan_backend_usp_certification.c
   backend/usp/lorawan_backend_usp_session.c
 )
 if(CONFIG_RZI_LORAWAN_BACKEND_USP)
+  zephyr_library_sources_ifdef(
+    CONFIG_LORA_BASICS_MODEM_CERTIFICATION
+    backend/usp/lorawan_backend_usp_certification.c
+  )
   include(${CMAKE_CURRENT_LIST_DIR}/backend/usp/lbm_checks.cmake)
 endif()
 zephyr_library_sources_ifdef(

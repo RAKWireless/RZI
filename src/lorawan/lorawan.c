@@ -692,17 +692,9 @@ int rzi_lorawan_register_service(const struct rzi_lorawan_service *service)
 static int begin_join(void)
 {
 	struct rzi_lorawan_join_config config;
-	enum rzi_lorawan_activation mode;
 	uint8_t attempts = 0;
-	int rc = rzi_lorawan_get_activation(&mode);
+	int rc = rzi_lorawan_get_join_attempts(&attempts);
 
-	if (rc != 0) {
-		return rc;
-	}
-	if (mode == RZI_LORAWAN_ACTIVATION_ABP && !rzi_lorawan_backend.supports_abp) {
-		return -RZI_ERR_NOT_SUPPORTED;
-	}
-	rc = rzi_lorawan_get_join_attempts(&attempts);
 	if (rc != 0) {
 		return rc;
 	}

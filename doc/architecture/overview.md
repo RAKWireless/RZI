@@ -1,0 +1,686 @@
+# Architecture
+
+Status: implemented
+
+SDK 0.1.0 layering, ownership, and backend policy. Planned items are marked
+in the text and in §18. The public ABI is `include/rzi/`.
+
+See also: [boot.md](boot.md), [lorawan-api.md](../api/lorawan.md),
+[coding-standards.md](../development/coding-standards.md).
+
+Audience: maintainers, product teams, Arduino Core, and application developers.
+Platform: Zephyr. First hardware: RAK4631 (nRF52840 + SX1262).
+
+## 1. Purpose
+
+RZI is the stable C SDK layer for building RAK products on Zephyr. It gives
+applications a RAK-oriented interface for connectivity and device services
+without exposing the selected protocol stack, its scheduler, or its private
+types.
+
+RZI is an independent repository and a standard Zephyr module. A customer
+application consumes it as a west project. The Arduino Core for Zephyr is a
+separate repository and implements the RUI-style C++ API on top of the public
+RZI C API.
+
+RZI has four architectural goals:
+
+1. Keep the application API stable while Zephyr and protocol backends evolve.
+2. Provide consistent RAK behavior across supported boards and backends.
+3. Reuse Zephyr facilities for hardware description, storage, power
+   management, device firmware update, logging, and testing.
+4. Let customers select only the services required by their product.
+
+RZI is not a Zephyr distribution, a board fork, or another copy of LoRa Basics
+Modem. It does not replace Zephyr drivers and does not expose Semtech or backend
+headers as part of its public contract.
+
+## 2. Repository and workspace model
+
+The supported customer topology is an application-as-manifest west workspace:
+
+```text
+rzi-workspace/
+├── .west/
+├── app/                    Customer manifest repository
+├── rzi/                              Independent RZI SDK repository
+├── zephyr/                           Revision selected by the application
+└── modules/
+    ├── usp_zephyr/                   USP Zephyr glue (backend)
+    └── lib/usp/                      USP / LoRa Basics Modem
+```
+
+The application declares RZI and imports its dependency manifest:
+
+```yaml
+manifest:
+  projects:
+    - name: rzi
+      url: https://github.com/RAKWireless/RZI
+      revision: <validated-rzi-tag-or-sha>
+      path: rzi
+      import: true
+```
+
+`west update` fetches RZI, the Zephyr revision RZI is validated against, and
+the dependencies required by the default backend. An application that lists
+`zephyr` in its own manifest selects that Zephyr revision instead. Production
+applications shall pin
+RZI to a released tag or commit instead of following `main`.
+
+The RZI repository contains reusable library code and focused verification
+samples. A separate example repository may contain a larger catalog of
+complete applications. Product code does not belong in the RZI repository.
+
+## 3. System context
+
+```text
+Application / Arduino wrapper ----> public RZI APIs
+AT client -> AT adapter ----------> public RZI APIs
+                                     |
+                               service core
+                                /        \
+                     optional services  private backend
+                                |          |
+                              Zephyr   USP / supported stack
+                                \          /
+                                 board hardware
+
+The Zephyr LBM backend is planned; see Backend strategy.
+```
+
+The public C API is the compatibility boundary. Backend changes stop at the
+private adapter. AT is an inbound adapter and the Arduino C++ wrapper is
+another public-API client. Neither calls a backend directly. AT may use Zephyr
+kernel primitives and its selected transport API, but business operations pass
+through public `include/rzi/` service APIs.
+
+## 4. Responsibility model
+
+| Layer | Responsibility | Application contract |
+|---|---|---|
+| Application | Product behavior, provisioning, schedule, UI | N/A |
+| Arduino/RUI C++ | RUI-style objects, overloads, callbacks | Separate repository |
+| RZI services | Stable RAK semantics, validation, state, events | Public C ABI |
+| RZI backend | Translate one RZI contract to one implementation | Private |
+| Protocol stack | MAC, regions, ADR, RX windows, cryptography | Private |
+| Zephyr | Kernel, drivers, DTS, settings, PM, DFU | Zephyr contract |
+| Hardware | MCU, radio, RF switch, TCXO, flash | Upstream DTS |
+
+Only one LoRaWAN backend is compiled into a firmware image. Multiple backends
+must never control the same radio instance at runtime.
+
+### RZI owns
+
+- public API semantics, validation, `RZI_ERR_*` behavior, and events;
+- service lifecycle and application-visible state;
+- backend capability reporting and feature gating;
+- RAK-compatible AT behavior;
+- RZI configuration schema and migrations;
+- product-level power coordination and FUOTA state;
+- the device boot contract (`CONFIG_RZI_MCUBOOT`, product boards, merged image);
+- compatibility and hardware validation matrices.
+
+### A backend owns
+
+- protocol-stack initialization and engine execution;
+- mapping join, uplink, downlink, status, regions, and events;
+- serialization required by the selected stack;
+- LoRaWAN session context and frame-counter persistence;
+- conversion of backend errors and metadata into RZI types.
+
+### Zephyr, upstream BSP, and MCUBoot own
+
+- SoC descriptions and upstream RAK module descriptions, where available;
+- GPIO, SPI, flash, UART, entropy, timer, and PM drivers;
+- settings, NVS, and the flash map;
+- MCUBoot **source** (west module): verify, select a slot, jump to the app;
+- upstream protocol APIs when they are available and stable.
+
+RZI exports a `board_root` with the upstream board extensions
+`rak4631/nrf52840/rzi` and `rak3172/stm32wle5xx/rzi`, plus the independent
+`rak3372_f` and `rak3362` boards. Partition tables live next to each
+variant or board DTS. It does not fork SoC bindings. Customers select the
+RZI variants when using upstream RAK4631 or RAK3172. The boot contract is
+`CONFIG_RZI_MCUBOOT`, sysbuild, and a merged image; see
+[boot.md](boot.md).
+
+The RAK4631 and standard RAK3172 variants include upstream board DTS files
+and override the RZI radio, console, and partition settings. RZI exports a
+`dts_root` for modules without a matching upstream description. The module
+descriptions used by the supported targets are:
+
+| Module | Include | Used by |
+|---|---|---|
+| RAK4630 (nRF52840 + SX1262) | `<rakwireless/rak4630.dtsi>` | `rak4631/nrf52840/rzi` |
+| RAK3172 (STM32WLE5CC) | `<arm/rakwireless/rak3172.dtsi>` | `rak3172/stm32wle5xx/rzi` |
+| RAK3172-F (STM32WLE5JC + MX25L400) | `<rakwireless/rzi_rak3172_f.dtsi>` | `rak3372_f` |
+| RAK3162 (nRF54L15 + SX1262) | `<rakwireless/rzi_rak3162.dtsi>` | `rak3362` |
+
+The module file owns what is fixed inside the module: SoC, regulators or
+clock tree, the LoRa radio node, and the pinmux of the module pads. It
+configures the pad peripherals (UART, I2C, SPI) but leaves them disabled.
+Devices wired inside the module, such as the RAK3172-F SPI NOR, are enabled
+in the module file. The carrier board DTS enables the pad peripherals it
+wires with `status = "okay"`, and adds LEDs, the console, USB, carrier
+flash, NFC pin use, and the partition map.
+The remaining RZI-owned module descriptions use the `rzi_` prefix. The
+RAK4630 and standard RAK3172 descriptions come from Zephyr.
+
+### The application owns
+
+- product policy and business behavior;
+- credential provisioning and access control;
+- which RZI product board and backend to use, and when to join, send, sleep,
+  update, or reboot;
+- not Zephyr partition tables or `SB_CONFIG_*` (official samples already set
+  them).
+
+## 5. Public API rules
+
+Application headers live under `include/rzi/` and provide a C ABI with C++
+guards. They contain RZI types, standard C types, and only unavoidable stable
+Zephyr types at I/O adapter boundaries.
+
+Public APIs:
+
+- return `0` or a negative `enum rzi_err` value from `include/rzi/err.h`;
+- validate input before entering a backend;
+- never expose USP, LBM, or backend-private Zephyr types;
+- copy asynchronous request data or define its lifetime explicitly;
+- deliver asynchronous completion through documented events;
+- avoid heap allocation in the base configuration;
+- remain source compatible within a major RZI version.
+
+RZI is not a one-to-one wrapper for every upstream API. A public operation is
+added when it represents a supported RAK product capability.
+
+Public header groups are:
+
+```text
+include/rzi/
+├── err.h                      Closed public error catalog
+├── init.h                     Shared infrastructure initialization
+├── version.h                  SDK version and compatibility queries
+├── network_mode.h             Network working-mode persistence
+├── lorawan/lorawan.h          Backend-independent LoRaWAN service
+├── lorawan/multicast.h        Multicast-session facade
+├── lorawan/certification.h    Certification-mode facade
+├── lorawan/fuota.h            Update state and control
+├── at/at.h                    AT lifecycle and I/O binding
+├── at/uart.h                  UART adapter
+├── storage/storage.h          Versioned RZI configuration
+├── power/power.h              Sleep constraints and wake policy
+└── diagnostics/diagnostics.h  Stable counters and health data (planned)
+```
+
+`err.h`, `init.h`, `version.h`, `network_mode.h`, and the lorawan, at, storage,
+and power headers are implemented. `rzi_init()` eagerly prepares parameter-free shared
+infrastructure such as storage so applications can fail early during boot.
+Services that require application configuration or own active hardware
+resources retain independent lifecycle APIs. Shared dependencies may also
+initialize lazily. `diagnostics/diagnostics.h` is still planned.
+
+## 6. LoRaWAN service
+
+### Implemented contract
+
+The current `include/rzi/lorawan/lorawan.h` supports:
+
+- Zephyr-shaped region selection, start, activation config, and send operations;
+- OTAA join, leave, and ABP for backends that implement it;
+- confirmed and unconfirmed uplink requests;
+- joined-state query;
+- one typed public event callback for join, send, downlink, state, MAC-command,
+  error, and Class B results;
+- capability bits for Class B, Class C, multicast, and FUOTA;
+- multiple callback subscribers, one modem instance, and one outstanding uplink;
+- a fixed-size private event queue with overflow reporting.
+
+`src/lorawan/lorawan.c` validates requests and dispatches copied backend events
+to subscribers outside the modem callback context. The private contract in
+`src/lorawan/backend/lorawan_backend.h` is implemented by one source under
+`src/lorawan/backend/`. Optional capability groups are typed ops tables hung
+directly on that contract; a NULL pointer means the backend does not implement
+the group. Optional services attach through `rzi_lorawan_register_service()` in
+`src/lorawan/lorawan_service.h`. The LoRaWAN service fans those hooks out after
+start and on every dispatched event; it does not name FUOTA or include service
+headers.
+FUOTA operations live in `src/lorawan/backend/ops/lorawan_fuota_ops.h` with the
+other backend ops tables.
+See [lorawan-api.md](../api/lorawan.md) for the normative API and concurrency
+contract.
+
+FUOTA coordination is implemented under `src/lorawan/services/fuota/` and
+`include/rzi/lorawan/fuota.h`. LinkCheck, DeviceTime, multicast, and
+certification are service facades: the first two live in
+`include/rzi/lorawan/lorawan.h`, the others keep dedicated public headers.
+Backend libraries own the LoRaWAN application-package implementations
+required by FUOTA; RZI does not duplicate them. Class and network/channel
+management remain in the LoRaWAN service.
+Unsupported backend operations return `-RZI_ERR_NOT_SUPPORTED`. Raw LoRa P2P and FSK use
+`CONFIG_RZI_LORA` and `include/rzi/lora/lora.h`.
+
+### Capability model
+
+Optional packages follow the LoRa Basics Modem compile-time switches.
+`rzi_lorawan_get_capabilities()` reports Class B, Class C, multicast, and
+FUOTA. Class B, multicast, and FUOTA bits are set only when the matching ops
+table is present. Baseline operations stay in the public API without a bit:
+OTAA, ABP, Class A, MAC parameters, the channel mask, session queries, LinkCheck,
+DeviceTime, and certification. The AT package forwards
+class, ADR, data rate, channels,
+link-check, Class B, multicast, and certification to the same C API.
+
+### Concurrency and events
+
+Backend callbacks copy a complete event into a fixed-size queue and return.
+The dispatcher thread delivers that event serially to every registered
+subscriber. Product code therefore runs outside the modem callback and
+outside any backend mutex.
+
+The service core owns the authoritative LoRaWAN lifecycle state. Backend
+events request transitions; they do not expose a second public state source.
+The state is updated before `STATE_CHANGED` is dispatched, and
+`rzi_lorawan_get_state()` reads the same atomic value. Backend-specific
+`active` or `joined` fields remain private implementation details.
+
+Service lifecycle uses `init` / `stop` / `deinit`: `stop` drains callbacks and
+retains configuration and subscribers for restart; `deinit` additionally
+releases backend references and application callback tables. The USP platform
+reference-counts LoRaWAN and raw LoRa users, sleeping the radio and parking its
+engine after the final release. A backend that cannot stop safely, including
+the current Zephyr LoRaWAN backend, returns `-RZI_ERR_NOT_SUPPORTED` without
+pretending that teardown succeeded.
+
+AT and FUOTA subscribe through the same dispatcher. Applications may
+register additional subscribers. Queue overflow is reported with
+`error(-RZI_ERR_OVERFLOW)`.
+
+## 7. Backend strategy
+
+### USP backend
+
+Status: implemented and current default.
+
+It initializes USP/RAC/LBM, serializes modem calls, maps modem events, and owns
+the current LoRaWAN context persistence path. USP remains useful for advanced
+USP/RAC features, additional radios, and features absent from upstream Zephyr.
+
+### Zephyr LBM backend
+
+Status: conditional roadmap item.
+
+Zephyr `main` fetches LoRa Basics Modem and supports it for the base LoRa radio
+API. Upstream PR
+[`#117833`](https://github.com/zephyrproject-rtos/zephyr/pull/117833) proposes an
+LBM implementation of the Zephyr LoRaWAN API. It has RAK4631 hardware results,
+but is not a released Zephyr contract.
+
+RZI may add `src/lorawan/backend/zephyr_lbm.c` for evaluation. It becomes
+eligible as the default only when:
+
+1. the upstream backend is merged and included in a supported Zephyr release;
+2. RAK4631 OTAA, uplink, RX1/RX2, ADR, reboot persistence, and regional tests
+   pass the RZI hardware matrix;
+3. its errors and events can satisfy the RZI contract;
+4. production features do not require bypassing Zephyr APIs into LBM internals.
+
+The proposed backend supports OTAA and Class A. ABP, Class B/C, device time,
+channel-mask control, and several modem controls remain unavailable. RZI keeps
+the USP backend until the required capability matrix is met.
+
+### Zephyr LoRaWAN API backend
+
+Status: implemented as a second real backend for contract validation. It is
+not the default.
+
+`CONFIG_RZI_LORAWAN_BACKEND_ZEPHYR` adapts Zephyr's public
+`<zephyr/lorawan/lorawan.h>` stack with the loramac-node module backend.
+That is a different path from the planned Zephyr LBM backend. See [lorawan-backend-zephyr.md](../api/zephyr-backend.md).
+
+### Selection
+
+Backend selection is a build-time Kconfig `choice`:
+
+```text
+CONFIG_RZI_LORAWAN_BACKEND_USP
+CONFIG_RZI_LORAWAN_BACKEND_ZEPHYR
+CONFIG_RZI_LORAWAN_BACKEND_ZEPHYR_LBM       planned
+```
+
+The common layer does not contain backend API conditionals. CMake selects one
+adapter, and each adapter provides the same private operations table. Build
+commands and overlay rules are in [lorawan-backends.md](../api/backends.md).
+
+## 8. Dependency and version policy
+
+West dependencies cannot be selected by Kconfig because `west update` runs
+before application configuration. Dependency management therefore has three
+phases.
+
+### Current USP default
+
+The root `west.yml` imports pinned `usp_zephyr` and `usp` revisions. Customers
+only import RZI and run `west update`.
+
+### Zephyr LBM evaluation
+
+An evaluation application may blocklist the USP projects and select a Zephyr
+revision containing the upstream backend. This is a CI and hardware validation
+path, not a production release dependency.
+
+### Future Zephyr LBM default
+
+After the migration criteria pass, the root manifest no longer pulls USP by
+default. USP dependencies move to an explicitly imported manifest fragment for
+products that require that backend.
+
+Every RZI release records:
+
+- supported Zephyr release and commit range;
+- default and optional backend revisions;
+- supported boards, regions, and capabilities;
+- bootloader and flash-layout constraints.
+
+Release manifests use tags or immutable SHAs and never follow an unmerged PR.
+
+## 9. AT service
+
+Status: I/O-independent command framework and basic RUI3-compatible
+LoRaWAN command package implemented.
+
+AT is a client of public RZI services. It does not call `smtc_modem_*`, Zephyr
+LoRaWAN, or private backend APIs directly.
+
+### AT dependency boundary
+
+AT is an inbound adapter, not a core business service. Its dependency direction
+is one-way:
+
+```text
+AT client
+  -> AT transport adapter
+  -> AT parser / command package
+  -> public RZI service API
+  -> service core
+  -> private backend
+  -> Zephyr / USP / vendor implementation
+```
+
+AT code must follow these boundaries:
+
+| AT component | Allowed dependencies | Forbidden dependencies |
+|---|---|---|
+| Core (`src/at/at*.c`) | AT private headers, public AT API, Zephyr kernel primitives | Service backends and vendor protocol APIs |
+| Commands (`src/at/commands/`) | AT private headers and public `include/rzi/` service APIs | Private service headers, backend headers, direct Settings or protocol-stack APIs |
+| Transport adapters (`src/at/adapters/`) | Public AT API and the selected transport API, such as Zephyr UART or GATT | LoRaWAN, raw-radio, storage, power, and update backends |
+
+Platform-facing system commands such as reboot, hardware identity, UART
+configuration, or Bluetooth identity may use the corresponding Zephyr platform
+API when no RZI business service owns that capability. This exception does not
+permit direct access to protocol stacks, persistent Settings, Semtech
+USP/LBM/RAC, or radio drivers.
+
+When an AT command needs a new business capability, that capability is added to
+the owning public RZI service first. The AT command then adapts the public API;
+it must not create a backend shortcut.
+
+The implementation separates protocol processing, command packages, and I/O:
+
+```text
+src/at/
+├── at.c                     lifecycle, RX queue, execution thread, output
+├── at_parser.c              RUI3 line grammar and line editing
+├── at_registry.c            command registration
+├── at_priv.h                cross-file private contract
+├── commands/
+│   ├── at_system.c          system command package
+│   ├── at_network_mode.c    shared AT+NWM state
+│   └── lorawan/
+│       ├── at_lorawan.c
+│       │                         package state, callbacks, NVM, registration
+│       ├── at_lorawan_priv.h
+│       │                         private command-package contract
+│       ├── at_lorawan_key_id.c
+│       │                         OTAA identifiers and keys
+│       ├── at_lorawan_join_send.c
+│       │                         activation and application data
+│       └── at_lorawan_network_management.c
+│                                 region, class, and MAC parameters
+└── adapters/
+    ├── at_adapter_uart.c    implemented interrupt-driven UART adapter
+    └── at_adapter_ble_uart.c
+                              reserved RUI3 SERIAL_BLE0 boundary
+```
+
+Adapters carry bytes between an I/O API and the AT framework; they never bypass
+parsing or transparently forward data to a modem. USB CDC ACM exposed as a Zephyr UART
+uses the UART adapter. The BLE UART boundary is grounded in RUI3
+`SERIAL_BLE0`; it is not compiled until its Zephyr GATT contract is
+implemented. Compatibility is documented command by command, including
+syntax, responses, events, persistence, reset behavior, and unsupported
+values.
+Large command packages are divided by stable RUI3 command domains. Each domain
+owns native `struct rzi_at_command` descriptors, so command names, help,
+allowed operations, and handlers have one source of truth.
+
+`CONFIG_RZI_AT` does not depend on LoRaWAN or UART. Command packages such as
+`CONFIG_RZI_AT_COMMAND_LORAWAN` depend only on the RZI service they expose, and
+adapters such as `CONFIG_RZI_AT_ADAPTER_UART` are selected independently.
+Applications may register static-lifetime commands before `rzi_at_init()`.
+
+## 10. Configuration and NVM
+
+Persistent state has separate owners:
+
+| State | Owner | Examples |
+|---|---|---|
+| Network working mode | Module-level network-mode persistence API | LoRa / LoRaWAN / FSK selection |
+| Service configuration | Owning RZI service | region, join mode, product settings |
+| Secrets | Provisioning/security layer | DevEUI, JoinEUI, AppKey/NwkKey |
+| LoRaWAN protocol context | Backend | frame counters, DevNonce, session, ADR |
+| Update state | RZI FUOTA | progress, image version, pending confirmation |
+
+The implemented `rzi/storage/storage.h` service provides serialized namespaced
+read/write/delete operations and currently adapts Zephyr settings. The AT
+component consumes this API and no longer calls settings directly. Schema
+versioning, migrations, transactions, and cross-service factory reset remain
+future storage-layer responsibilities. Suggested namespaces are:
+
+```text
+rzi/meta/*
+rzi/network_mode
+rzi/at/*
+rzi/fuota/*
+```
+
+RZI does not copy or edit opaque backend context. Production credentials are
+not compiled into DTS, logged, or returned by diagnostics. Sample overlays use
+zero credentials only as build placeholders.
+
+AT, BLE, Shell, and applications do not own Storage keys for shared
+configuration. They call the typed API of the owning service. For example,
+`AT+NWM` calls `rzi_get_network_mode()` and
+`rzi_set_network_mode()`; only the network-mode persistence API owns that value's
+namespace, record version, representation, and validation. Its implementation
+lives in `src/common/network_mode_store.c` and uses the `rzi/network_mode`
+storage path.
+
+## 11. Power management
+
+Status: implemented coordinator (`include/rzi/power/power.h`). Hardware current
+targets remain a product acceptance item.
+
+RZI uses Zephyr's native `enum pm_state`, device tree, PM policy and locks.
+It defines no separate sleep modes. Applications enable `CONFIG_PM` when
+supported. The runtime API / AT switch owns one native all-state lock;
+service PM locks own paired native lock references. Device runtime PM and
+ordinary CPU idle remain independent of this switch. Kernel timeouts and
+the LoRaWAN backend provide scheduling; RZI adds no separate PM event.
+
+The periodic-uplink board configs enable `CONFIG_PM` on STM32WLE5, where
+Zephyr may select STOP0/1/2. Current nRF52840 and nRF54L15 configurations
+use ordinary CPU idle without system PM.
+
+The backend remains responsible for protocol timing. RZI does not calculate or
+delay LoRaWAN RX windows in application code. That matches Semtech USP
+`periodical_uplink`, ST AN5406 `LoRaWAN_End_Node`, and RAK RUI3-Best-Practice:
+the application is event-driven; idle/STOP happens when the stack has nothing
+to run. Acceptance tests cover idle and joined current, RX timing, wake
+latency, retained settings, and repeated sleep/join/send cycles. See
+[power.md](power.md) and [power-api.md](../api/power.md).
+
+## 12. FUOTA
+
+Status: implemented coordination API; MCUboot product profile remains optional.
+
+```text
+Network server -> backend FUOTA packages -> RZI state/events
+  -> reconstructed image -> flash_img copy to slot1
+  -> MCUboot validation and installation after reboot
+
+Current dual-slot product boards use overwrite-only installation.
+Rollback/test-boot behavior requires a separately configured swap profile.
+```
+
+RZI owns update state and public events. The backend owns supported LoRaWAN
+packages. Zephyr owns flash/reboot integration. MCUboot owns image validation
+and installation according to the selected boot mode.
+
+FUOTA is enabled only when the backend advertises the required multicast,
+clock synchronization, and fragmentation support. Products must validate
+signed-image installation and recovery for their selected boot mode. The
+current overwrite-only boards do not provide automatic rollback; test boot
+and confirmation require a separate swap-capable product profile.
+
+## 13. Arduino Core and RUI C++
+
+The Arduino Core for Zephyr remains a separate consumer:
+
+```text
+Arduino sketch
+    -> RUI-style C++ classes
+        -> extern "C" RZI API
+            -> selected backend
+```
+
+The C++ layer owns Arduino object models, overloads, callbacks, and sketch
+compatibility. It contains no protocol integration and includes no private RZI
+headers. Native Zephyr, AT firmware, and Arduino therefore share one RZI C
+implementation.
+
+Status: ArduinoCore-zephyr `cores/arduino/RUI.*` now provides an `api.lorawan`
+OTAA subset (join / send / band / njm / callbacks). ADR, P2P, and the full
+RUI3 system API are still missing. Sketches must not include USP headers.
+
+## 14. Diagnostics
+
+Status: planned.
+
+Diagnostics expose stable product data: component versions, reset reason, last
+service error, join and TX counters, last RSSI/SNR, queue overflows, storage
+status, power residency, wake reasons, and FUOTA state. Secrets and complete
+session context are never exposed. Backend log text is not an API contract.
+
+## 15. Target repository layout
+
+```text
+rzi/
+├── zephyr/                  Top-level and per-service Kconfig integration
+├── include/rzi/
+├── src/
+│   ├── common/              Error catalog and SDK version
+│   ├── lorawan/
+│   │   ├── lorawan.c
+│   │   ├── lorawan_service.h
+│   │   ├── lorawan_priv.h
+│   │   ├── api/
+│   │   │   ├── lorawan_network.c
+│   │   │   ├── lorawan_channel.c
+│   │   │   ├── lorawan_class_b.c
+│   │   │   ├── lorawan_session.c
+│   │   │   ├── lorawan_mac_commands.c
+│   │   │   ├── lorawan_multicast.c
+│   │   │   └── lorawan_certification.c
+│   │   ├── backend/
+│   │   │   ├── lorawan_backend.h
+│   │   │   ├── ops/        Typed optional backend capability contracts
+│   │   │   ├── usp/        USP/LBM backend split by capability domain
+│   │   │   ├── zephyr/lorawan_backend_zephyr.c
+│   │   │   └── zephyr_lbm.c                       planned
+│   │   └── services/fuota/  Optional FUOTA coordinator
+│   ├── at/
+│   ├── storage/             Namespaced settings adapter
+│   ├── power/
+│   ├── lora/                Raw LoRa / FSK scaffold
+│   └── diagnostics/         planned
+├── boards/                  Product boards; partition dtsi lives here
+├── samples/
+├── tests/
+├── doc/
+├── tools/
+├── west.yml
+├── LICENSE
+└── README.md
+```
+
+Each service owns its CMake source list. Reserved feature directories are
+accepted design boundaries, but their Kconfig symbols default to disabled and
+their translation units are excluded until explicitly selected.
+
+## 16. Verification strategy
+
+Status: host-side checks run in CI; hardware verification stays a release
+gate. [ci.md](../development/ci.md) documents the workflow, version pins, and local
+reproduction.
+
+Automated verification includes:
+
+- build every sample in the supported board/backend matrix;
+- run formatting and Zephyr checkpatch;
+- test validation, state transitions, queue overflow, AT parsing, and storage
+  migration on a host or simulated target;
+- compile each backend independently;
+- compile public headers from C and C++;
+- resolve a clean customer west workspace;
+- scan non-documentation source for unintended non-English text.
+
+Hardware verification for each release profile includes cold boot, factory
+reset, OTAA, leave/rejoin, confirmed and unconfirmed uplink, RX1/RX2 downlink,
+RSSI/SNR, context continuity, RF output, event stress, sleep current, wake
+timing, and FUOTA recovery when enabled.
+
+RAK4631 with a known-good RAK gateway is the initial reference setup. A build
+pass does not replace RF and power measurements.
+
+## 17. Delivery roadmap
+
+| Stage | Scope | Exit criteria |
+|---|---|---|
+| 0 - Foundation | Module, common LoRaWAN layer, USP backend, basic AT/NVS, samples | Implemented and build verified |
+| 1 - Contract hardening | Version, lifecycle, errors, state/AT tests | Public v0.x contract documented and tested |
+| 2 - Backend migration | Experimental Zephyr LBM adapter and two-backend matrix | Upstream release and RAK4631 parity |
+| 3 - Device services | Storage, diagnostics, power, AT separation | Migration and power targets pass |
+| 4 - FUOTA | Package adapter, DFU state, MCUboot rollback | Signed update and recovery pass |
+| 5 - Arduino/RUI | Separate C++ facade and compatibility tests | RUI examples run without backend access |
+| 6 - Stable release | Versioned manifest, matrix, migration guide, release CI | RZI 1.0 policy approved |
+
+## 18. Current gaps
+
+| Area | Current state | Required work |
+|---|---|---|
+| Capabilities | SDK 0.3 LoRaWAN feature queries implemented | Stack-level `-RZI_ERR_NOT_SUPPORTED` where LBM/Zephyr expose no API |
+| Events | Multi-subscriber dispatcher implemented | Add overflow stress coverage |
+| AT | Core, commands, and adapters separated | Add command-package matrix |
+| Configuration | AT consumes RZI storage API | Add schema version and migrations |
+| Backend context | USP HAL owns it | Preserve backend ownership |
+| Zephyr LBM | Open upstream PR | Evaluate without release dependency |
+| Power | Coordinator and automatic service PM locks implemented | Hardware current targets and Class B |
+| FUOTA | Coordination API and USP/LBM packages; the application calls `rzi_fuota_apply()` | Signed image CI |
+| C++ RUI | Arduino Core has an OTAA facade | ADR / P2P / full system API still pending |
+| API/ABI version | Canonical SDK version API exists | Define ABI policy before 1.0 |
+
+This table is reviewed at each milestone. Architecture documentation must
+separate implemented behavior from planned behavior and change when an
+upstream dependency moves an ownership boundary.

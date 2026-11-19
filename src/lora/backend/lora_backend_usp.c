@@ -16,8 +16,12 @@
 #include <zephyr/kernel.h>
 #include <zephyr/sys/atomic.h>
 #include <smtc_modem_hal.h>
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 #include <smtc_modem_test_api.h>
+#endif
 #include <smtc_rac_api.h>
+
+#include <zephyr/pm/policy.h>
 
 #include "lora_backend.h"
 #include "usp_platform.h"
@@ -30,8 +34,10 @@
 /* Continuous receive is a chain of windows of this length. */
 #define RX_WINDOW_MS  60000U
 
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 /* smtc_modem_test_get_rssi() reports RSSI + 64. */
 #define USP_TEST_RSSI_OFFSET 64
+#endif
 
 /* LoRa Basics Modem test-mode FSK packet format. */
 #define FSK_PREAMBLE_DETECTOR RAL_GFSK_PREAMBLE_DETECTOR_MIN_16BITS
@@ -54,9 +60,12 @@ static struct rzi_lora_config config;
 static enum rzi_lora_modulation modulation = RZI_LORA_MOD_LORA;
 static bool opened;
 static bool platform_acquired;
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 static bool test_mode;
+#endif
 static bool tx_busy;
 static bool rx_active;
+static bool rx_cancel_pending;
 static bool rx_continuous;
 static int64_t rx_deadline_ms;
 static uint8_t tx_buffer[RZI_LORA_MAX_PAYLOAD];
@@ -65,6 +74,40 @@ static uint8_t rx_buffer[RZI_LORA_MAX_PAYLOAD];
 /* Completed TX handed to poll(): tx_error is valid once tx_done is set. */
 static atomic_t tx_done;
 static atomic_t tx_error;
+
+/* Protected by the USP mutex. Keep the reference until poll drains completions. */
+static bool activity_held;
+
+static void activity_get(void)
+{
+	if (!activity_held) {
+#ifdef CONFIG_PM
+		pm_policy_state_all_lock_get();
+#endif
+		activity_held = true;
+	}
+}
+
+/*
+ * With RX_IRQ_WAKE the radio IRQ wakes the system from STOP, so an open
+ * receive window does not hold the PM reference. TX, a pending cancel, and
+ * undelivered completions still do.
+ */
+static bool rx_holds_pm(void)
+{
+	return !IS_ENABLED(CONFIG_RZI_LORA_USP_RX_IRQ_WAKE) && rx_active;
+}
+
+static void activity_update(void)
+{
+	if (activity_held && !tx_busy && !rx_holds_pm() && !rx_cancel_pending &&
+	    atomic_get(&tx_done) == 0 && k_msgq_num_used_get(&rx_queue) == 0U) {
+#ifdef CONFIG_PM
+		pm_policy_state_all_lock_put();
+#endif
+		activity_held = false;
+	}
+}
 
 static int rac_result(smtc_rac_return_code_t rc)
 {
@@ -110,6 +153,7 @@ static uint8_t lora_sync_byte(uint16_t sync_word)
 	return (uint8_t)sync_word;
 }
 
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 static smtc_modem_test_mode_sync_word_t test_sync(uint16_t sync_word)
 {
 	switch (lora_sync_byte(sync_word)) {
@@ -123,6 +167,7 @@ static smtc_modem_test_mode_sync_word_t test_sync(uint16_t sync_word)
 		return SYNC_WORD_0x34;
 	}
 }
+#endif
 
 static void fill_lora(smtc_rac_context_t *ctx, bool is_tx, uint16_t size, uint32_t timeout_ms)
 {
@@ -212,6 +257,7 @@ static void on_tx_done(rp_status_t status)
 	tx_busy = false;
 	atomic_set(&tx_error, error);
 	atomic_set(&tx_done, 1);
+	rzi_lora_notify_poll();
 }
 
 static int submit_rx_window(void)
@@ -232,7 +278,10 @@ static int submit_rx_window(void)
 static void on_rx_done(rp_status_t status)
 {
 	const smtc_rac_context_t *ctx = smtc_rac_get_context(RX_ID);
+	bool notify = false;
 	bool again;
+
+	rx_cancel_pending = false;
 
 	if (status == RP_STATUS_RX_PACKET && ctx->smtc_rac_data_result.rx_size > 0U) {
 		struct rx_packet packet = {
@@ -242,18 +291,25 @@ static void on_rx_done(rp_status_t status)
 		};
 
 		memcpy(packet.data, rx_buffer, packet.size);
-		(void)k_msgq_put(&rx_queue, &packet, K_NO_WAIT);
+		if (k_msgq_put(&rx_queue, &packet, K_NO_WAIT) == 0) {
+			/* Keep the system awake until poll() delivers the packet. */
+			activity_get();
+			notify = true;
+		}
 	}
-	if (!rx_active) {
-		return;
+	if (rx_active) {
+		/*
+		 * A timed receive ends with its first packet or its timeout. Windows
+		 * cut short by higher-priority radio use resume until the deadline.
+		 */
+		again = rx_continuous || status == RP_STATUS_TASK_ABORTED;
+		if (!again || submit_rx_window() != 0) {
+			rx_active = false;
+		}
 	}
-	/*
-	 * A timed receive ends with its first packet or its timeout. Windows
-	 * cut short by higher-priority radio use resume until the deadline.
-	 */
-	again = rx_continuous || status == RP_STATUS_TASK_ABORTED;
-	if (!again || submit_rx_window() != 0) {
-		rx_active = false;
+	activity_update();
+	if (notify) {
+		rzi_lora_notify_poll();
 	}
 }
 
@@ -284,15 +340,34 @@ static int open_radio(void)
 }
 
 /* With the lock held: cancel P2P transactions. */
-static void abort_p2p(void)
+static int abort_p2p(void)
 {
-	rx_active = false;
-	if (opened) {
-		(void)smtc_rac_abort_radio_submit(RX_ID);
-		(void)smtc_rac_abort_radio_submit(TX_ID);
+	int rc;
+
+	if (opened && rx_active) {
+		/* Hold PM across async RAC cancellation even in RX_IRQ_WAKE mode. */
+		activity_get();
+		rx_cancel_pending = true;
+		rx_active = false;
+		rc = rac_result(smtc_rac_abort_radio_submit(RX_ID));
+		if (rc != 0) {
+			rx_active = true;
+			rx_cancel_pending = false;
+			activity_update();
+			return rc;
+		}
 	}
+	if (opened && tx_busy) {
+		rc = rac_result(smtc_rac_abort_radio_submit(TX_ID));
+		if (rc != 0) {
+			return rc;
+		}
+	}
+	/* RAC may finish cancellation on the next engine pass. */
+	return rx_cancel_pending || tx_busy ? -RZI_ERR_BUSY : 0;
 }
 
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 /* With the lock held. Test mode suspends LoRaWAN until leave_test_mode(). */
 static int enter_test_mode(void)
 {
@@ -301,11 +376,15 @@ static int enter_test_mode(void)
 	if (test_mode) {
 		return 0;
 	}
-	abort_p2p();
+	rc = abort_p2p();
+	if (rc != 0) {
+		return rc;
+	}
 	rc = rzi_usp_result(smtc_modem_test_start());
 	if (rc == 0) {
 		test_mode = true;
 	}
+	activity_update();
 	return rc;
 }
 
@@ -322,6 +401,12 @@ static int leave_test_mode(void)
 	}
 	return rc;
 }
+#else
+static int leave_test_mode(void)
+{
+	return 0;
+}
+#endif
 
 static int usp_init(enum rzi_lora_modulation value)
 {
@@ -353,12 +438,18 @@ static int usp_stop(void)
 	int rc;
 
 	rzi_usp_lock();
-	abort_p2p();
-	tx_busy = false;
+	rc = abort_p2p();
+	if (rc != 0) {
+		rzi_usp_unlock();
+		return rc;
+	}
 	rc = leave_test_mode();
 	rzi_usp_unlock();
 	atomic_clear(&tx_done);
 	k_msgq_purge(&rx_queue);
+	rzi_usp_lock();
+	activity_update();
+	rzi_usp_unlock();
 	return rc;
 }
 
@@ -406,10 +497,12 @@ static int usp_send(const uint8_t *data, size_t size)
 		rc = -RZI_ERR_BUSY;
 	}
 	if (rc == 0) {
+		activity_get();
 		memcpy(tx_buffer, data, size);
 		rc = submit(TX_ID, true, (uint16_t)size, 0U);
 		tx_busy = rc == 0;
 	}
+	activity_update();
 	rzi_usp_unlock();
 	return rc;
 }
@@ -419,23 +512,45 @@ static int usp_receive(uint32_t timeout_ms)
 	int rc;
 
 	rzi_usp_lock();
-	rx_active = false;
-	(void)smtc_rac_abort_radio_submit(RX_ID);
 	if (timeout_ms == 0U) {
+		if (rx_active) {
+			/* Hold PM until RAC finishes aborting the RX task. */
+			activity_get();
+			rx_cancel_pending = true;
+			rx_active = false;
+			rc = rac_result(smtc_rac_abort_radio_submit(RX_ID));
+			if (rc != 0) {
+				rx_active = true;
+				rx_cancel_pending = false;
+				activity_update();
+				rzi_usp_unlock();
+				return rc;
+			}
+		}
+		activity_update();
 		rzi_usp_unlock();
 		return 0;
 	}
+	if (rx_active || rx_cancel_pending) {
+		rzi_usp_unlock();
+		return -RZI_ERR_BUSY;
+	}
 	rc = leave_test_mode();
 	if (rc == 0) {
+		if (!IS_ENABLED(CONFIG_RZI_LORA_USP_RX_IRQ_WAKE)) {
+			activity_get();
+		}
 		rx_continuous = timeout_ms == RX_CONTINUOUS;
 		rx_deadline_ms = k_uptime_get() + timeout_ms;
 		rc = submit_rx_window();
 		rx_active = rc == 0;
 	}
+	activity_update();
 	rzi_usp_unlock();
 	return rc;
 }
 
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 static int usp_test_rssi(void)
 {
 	int rc;
@@ -525,6 +640,17 @@ static int usp_test_stop(void)
 	rzi_usp_unlock();
 	return rc;
 }
+#endif
+
+static bool usp_receive_active(void)
+{
+	bool receiving;
+
+	rzi_usp_lock();
+	receiving = rx_active;
+	rzi_usp_unlock();
+	return receiving;
+}
 
 static void usp_poll(void)
 {
@@ -537,6 +663,9 @@ static void usp_poll(void)
 		rzi_lora_publish_rx(packet.data, packet.size, packet.rssi_dbm,
 				    packet.snr_quarter_db);
 	}
+	rzi_usp_lock();
+	activity_update();
+	rzi_usp_unlock();
 }
 
 const struct rzi_lora_backend_api rzi_lora_backend = {
@@ -546,6 +675,7 @@ const struct rzi_lora_backend_api rzi_lora_backend = {
 	.apply_config = usp_apply,
 	.send = usp_send,
 	.receive = usp_receive,
+#ifdef CONFIG_LORA_BASICS_MODEM_TEST_MODE
 	.test_rssi = usp_test_rssi,
 	.test_get_rssi = usp_test_get_rssi,
 	.test_tone = usp_test_tone,
@@ -553,5 +683,7 @@ const struct rzi_lora_backend_api rzi_lora_backend = {
 	.test_rx = usp_test_rx,
 	.test_cw = usp_test_cw,
 	.test_stop = usp_test_stop,
+#endif
+	.receive_active = usp_receive_active,
 	.poll = usp_poll,
 };

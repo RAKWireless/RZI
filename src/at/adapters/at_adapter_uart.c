@@ -8,7 +8,13 @@
 #include <errno.h>
 
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/uart.h>
+
+#if defined(CONFIG_SOC_SERIES_STM32WLX) && DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(lpuart1))
+#include <stm32_ll_bus.h>
+#include <stm32_ll_usart.h>
+#endif
 
 #include <rzi/at/at.h>
 #include <rzi/at/uart.h>
@@ -30,6 +36,52 @@ static int uart_write(const uint8_t *data, size_t size, void *user_data)
 	}
 	return 0;
 }
+
+#if defined(CONFIG_SOC_SERIES_STM32WLX) && DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(lpuart1))
+static void pause_spins(uint32_t spins)
+{
+	for (uint32_t i = 0U; i < spins; i++) {
+		__NOP();
+	}
+}
+
+/*
+ * Called with the UART IRQ still masked, before the system clock is restored.
+ * The waking byte is already in the FIFO; keep reading until the line is quiet.
+ */
+void stm32wl_lpuart_wakeup_drain(void)
+{
+	uint32_t quiet = 0U;
+	uint32_t total = 0U;
+
+	if (active_uart != DEVICE_DT_GET(DT_NODELABEL(lpuart1)) ||
+	    !LL_APB1_GRP2_IsEnabledClock(LL_APB1_GRP2_PERIPH_LPUART1)) {
+		return;
+	}
+	if (!LL_USART_IsActiveFlag_WKUP(LPUART1) && !LL_USART_IsActiveFlag_RXNE(LPUART1)) {
+		return;
+	}
+	for (;;) {
+		if (LL_USART_IsActiveFlag_RXNE(LPUART1)) {
+			uint8_t byte = (uint8_t)LL_USART_ReceiveData8(LPUART1);
+
+			if (LL_USART_IsActiveFlag_ORE(LPUART1)) {
+				LL_USART_ClearFlag_ORE(LPUART1);
+			}
+			ignore_result(rzi_at_receive(&byte, 1U));
+			quiet = 0U;
+			continue;
+		}
+		if (quiet >= 100000U || total >= 2000000U) {
+			break;
+		}
+		pause_spins(1U);
+		quiet++;
+		total++;
+	}
+	LL_USART_ClearFlag_WKUP(LPUART1);
+}
+#endif
 
 static void uart_isr(const struct device *uart, void *user_data)
 {

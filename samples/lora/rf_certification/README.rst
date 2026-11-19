@@ -124,7 +124,7 @@ From the workspace root:
    west build -p always -b rak4631/nrf52840/rzi --sysbuild rzi/samples/lora/rf_certification
 
 For RAK3372 use ``-b rak3172/stm32wle5xx/rzi``. Flash
-``build/merged_<board>.hex``. See ``doc/boot.md``.
+``build/merged_<board>.hex``. See ``doc/architecture/boot.md``.
 
 Expected output
 ***************

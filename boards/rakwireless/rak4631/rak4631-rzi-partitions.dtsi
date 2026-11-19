@@ -2,10 +2,14 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * rak4631/nrf52840/rzi flash map (nRF52840, 1 MB).
- * MCUboot boots slot0. Slot1 is the FUOTA / swap image. user_sketch
- * holds the Arduino LLEXT; native Zephyr apps ignore that node.
+ * Boot and both slots match upstream Zephyr rak4631.dts. An Arduino
+ * loader and an RZI application replace each other in slot0, so the
+ * rzi snippet must keep this map. The upstream 192 KB storage region
+ * holds the Arduino LLEXT, Zephyr settings, and the LoRa Basics Modem
+ * context. Native Zephyr apps ignore user_sketch. Settings and the
+ * modem context do not share a partition.
  *
- * 48K boot + 304K slot0 + 304K slot1 + 336K sketch + 32K storage.
+ * 64K boot + 384K slot0 + 384K slot1 + 160K sketch + 24K storage + 8K context.
  */
 
 / {
@@ -13,6 +17,7 @@
 		zephyr,sram = &sram0;
 		zephyr,flash = &flash0;
 		zephyr,code-partition = &slot0_partition;
+		lora-basics-modem-context-partition = &lora_context_partition;
 	};
 };
 
@@ -26,31 +31,37 @@
 		boot_partition: partition@0 {
 			compatible = "zephyr,mapped-partition";
 			label = "mcuboot";
-			reg = <0x00000000 0x0000c000>;
+			reg = <0x00000000 0x00010000>;
 		};
 
-		slot0_partition: partition@c000 {
+		slot0_partition: partition@10000 {
 			compatible = "zephyr,mapped-partition";
 			label = "image-0";
-			reg = <0x0000c000 0x0004c000>;
+			reg = <0x00010000 0x00060000>;
 		};
 
-		slot1_partition: partition@58000 {
+		slot1_partition: partition@70000 {
 			compatible = "zephyr,mapped-partition";
 			label = "image-1";
-			reg = <0x00058000 0x0004c000>;
+			reg = <0x00070000 0x00060000>;
 		};
 
-		user_sketch: partition@a4000 {
+		user_sketch: partition@d0000 {
 			compatible = "zephyr,mapped-partition";
 			label = "user";
-			reg = <0x000a4000 0x00054000>;
+			reg = <0x000d0000 0x00028000>;
 		};
 
 		storage_partition: partition@f8000 {
 			compatible = "zephyr,mapped-partition";
 			label = "storage";
-			reg = <0x000f8000 0x00008000>;
+			reg = <0x000f8000 0x00006000>;
+		};
+
+		lora_context_partition: partition@fe000 {
+			compatible = "zephyr,mapped-partition";
+			label = "lora_context";
+			reg = <0x000fe000 0x00002000>;
 		};
 	};
 };

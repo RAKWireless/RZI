@@ -97,9 +97,4 @@ config RZI_AT_THREAD_PRIORITY
 	range 0 15
 	default 14
 
-config RZI_AT_PROCESS_INTERVAL_MS
-	int "AT extension processing interval in milliseconds"
-	range 1 1000
-	default 20
-
 endif # RZI_AT

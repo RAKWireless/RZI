@@ -4,8 +4,8 @@ Contributions are welcome: bug reports, documentation, tests, board support,
 and implementation changes. Keep each pull request focused on one problem
 and explain the resulting behavior for users.
 
-Read the [coding standards](doc/coding-standards.md),
-[architecture](doc/architecture.md), and [CI guide](doc/ci.md) before changing
+Read the [coding standards](doc/development/coding-standards.md),
+[architecture](doc/architecture/overview.md), and [CI guide](doc/development/ci.md) before changing
 code. Report vulnerabilities through the
 [security policy](.github/SECURITY.md), rather than a public issue.
 
@@ -49,7 +49,35 @@ changes. For a pull request targeting a maintenance branch, substitute that
 branch for `main` throughout this guide.
 
 The optional hooks run staged C style checks and commit-message checks.
-Their dependencies and local commands are documented in [CI](doc/ci.md).
+Their dependencies and local commands are documented in [CI](doc/development/ci.md).
+
+## clangd setup
+
+The checked-in .clangd contains shared parsing adjustments only. It does
+not select a developer's build directory, CPU target, or floating-point ABI.
+Clangd uses the active build's compile_commands.json and compiler settings.
+
+After configuring a build with CMAKE_EXPORT_COMPILE_COMMANDS enabled, link
+its application-domain database into the RZI repository. For example, from
+the west workspace root:
+
+```sh
+ln -s ../build/uplink-rak3172-rzi/periodical_uplink/compile_commands.json \
+  rzi/compile_commands.json
+```
+
+The example assumes an existing sysbuild under build/uplink-rak3172-rzi.
+Choose the matching application-domain path for your board and build;
+the sysbuild root is not the application's compilation database. The
+repository-root compile_commands.json is ignored by Git. Update the local
+link when changing builds. Alternatively, select the build database using
+your editor's local --compile-commands-dir setting.
+
+Configure --query-driver in local editor settings when clangd needs to query
+the cross compiler for its target and system includes. Limit that setting
+to the trusted toolchain in your workspace. Keep absolute paths and any
+board-specific parser workarounds in local settings or user config rather
+than the shared .clangd. See the [clangd configuration guide](https://clangd.llvm.org/config).
 
 ## Write and commit changes
 
@@ -94,7 +122,7 @@ Signed-off-by: Your Name <your-email@example.com>
 ```
 
 Wrap body lines at 75 characters; see the
-[commit rules](doc/coding-standards.md#9-commits) for exceptions. Stage explicit
+[commit rules](doc/development/coding-standards.md#9-commits) for exceptions. Stage explicit
 paths, inspect the staged diff, and sign off each commit:
 
 ```sh
@@ -110,7 +138,7 @@ It adds a `Signed-off-by` trailer, not a cryptographic signature. Use your
 own configured name and email, and preserve attribution when editing someone
 else's commits. The optional local commit-message hook checks the message
 and the author sign-off, and also runs Zephyr gitlint. CI does not. See the
-[maintainer workflow](doc/maintainer-workflow.md)
+[maintainer workflow](doc/development/maintainer-workflow.md)
 for ownership, protected branches, and the exact merge gates.
 
 ## Rebase and resolve conflicts
@@ -175,7 +203,7 @@ west build --sysbuild -b rak4631/nrf52840/rzi \
 Choose board targets and samples from the
 [README](https://github.com/RAKWireless/RZI#supported-boards).
 For public API changes, also run the C/C++ header checks and Doxygen checks
-described in [CI](doc/ci.md#local-reproduction). CI additionally checks the
+described in [CI](doc/development/ci.md#local-reproduction). CI additionally checks the
 sample integration builds, license compliance, version consistency, and
 SBOMs. Full reproduction commands and dependencies live in that guide.
 
@@ -208,7 +236,7 @@ request review again after updating the PR. The designated maintainer
 `@DanielCao0` may merge their own PRs without another person's approval through
 the separate review ruleset's PR-only exception. Everyone must resolve review
 threads, satisfy the up-to-date rule, and pass `CI required`. See the
-[maintainer workflow](doc/maintainer-workflow.md#activate-github-protection)
+[maintainer workflow](doc/development/maintainer-workflow.md#activate-github-protection)
 for the exception's scope and GitHub activation steps.
 
 ## Releases
@@ -216,8 +244,8 @@ for the exception's scope and GitHub activation steps.
 Maintainers publish releases from tested commits using `v<version>` tags.
 The release workflow validates the tag, reruns CI, builds firmware, generates
 SBOMs and checksums, and prepares a draft Release for maintainer review; see
-[release details](doc/sbom.md#releases) and the
-[release procedure](doc/maintainer-workflow.md#release-procedure).
+[release details](doc/development/sbom.md#releases) and the
+[release procedure](doc/development/maintainer-workflow.md#release-procedure).
 Keep version metadata consistent as required by CI, document user-visible
 changes and upgrade steps, and complete the relevant hardware validation.
 Before publishing, move the relevant `Unreleased` entries into a versioned

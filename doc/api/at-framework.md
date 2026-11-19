@@ -1,0 +1,101 @@
+# AT framework
+
+Status: implemented
+
+RUI3-compatible command behavior without tying commands to a serial driver
+or a protocol backend.
+
+See also: [at-command-compatibility.md](../compatibility/at-commands.md),
+[error-codes.md](error-codes.md),
+[RZI API and backend coverage](../compatibility/rzi-coverage.md).
+
+## Boundaries
+
+The framework owns line framing, RUI3 grammar, command dispatch, responses,
+unsolicited events, and one execution thread. An adapter only moves bytes
+between a specific I/O API and the framework. A command package translates requests
+into public RZI service calls. It never calls a private LoRaWAN backend or owns
+a hardware adapter.
+
+```text
+UART / future RUI3 BLE UART adapter
+                |
+                v
+       RX ring and AT thread
+                |
+                v
+       parser -> registry
+                    |
+          +---------+----------+
+          |                    |
+     system commands     LoRaWAN / P2P commands
+                               |
+                               v
+                    public RZI LoRaWAN / LoRa API
+```
+
+## Configuration
+
+`CONFIG_RZI_AT` enables only the AT framework. It does not enable LoRaWAN or
+UART. The current optional pieces are:
+
+- `CONFIG_RZI_AT_COMMAND_LORAWAN`: RUI3 LoRaWAN command package;
+- `CONFIG_RZI_AT_COMMAND_LORA`: RUI3 P2P LoRa/FSK and radio-test package;
+- `CONFIG_RZI_AT_ADAPTER_UART`: interrupt-driven UART I/O adapter;
+- `CONFIG_RZI_AT_ECHO`: terminal input echo;
+- `CONFIG_RZI_AT_NVM`: persistence through the public RZI storage service.
+
+Buffer sizes, registry capacity, thread stack, and thread priority are
+separate Kconfig settings. Future command packages and I/O
+adapters must follow the same dependency direction. The BLE UART adapter is a
+reserved `0.0.0` boundary based on RUI3 `SERIAL_BLE0` and is not compiled.
+Zephyr USB CDC ACM uses the implemented UART adapter.
+
+The authoritative list of implemented commands and the compatibility limits of
+each command are documented in
+[`at-command-compatibility.md`](../compatibility/at-commands.md).
+
+## Command package organization
+
+Small packages may use one source file. Larger packages use a package
+subdirectory and split handlers by stable command domain. The LoRaWAN package
+follows the RUI3 domains where they are useful:
+
+- `key_id`: identifiers and root keys;
+- `join_send`: activation, uplink, and downlink;
+- `network_management`: network mode, region, and device class.
+
+Each domain owns native `struct rzi_at_command` descriptors. The descriptor is
+the single source of truth for the command name, help, allowed operations, and
+handler. RZI does not copy RUI3's separate `_def.h` pattern because that would
+duplicate metadata already represented by the registry.
+
+## Extending commands
+
+An application declares one or more static-lifetime `struct rzi_at_command`
+objects and registers them before starting the AT service. Each entry declares
+its command name, help text, allowed RUI3 operations, handler, and optional
+context. Registration validates the complete batch, rejects duplicate or
+invalid names, and becomes immutable when the service starts.
+
+Handlers use `rzi_at_respond_status()` or `rzi_at_respond_value()`. A
+handler that does not write a reply returns `0` or a negative `RZI_ERR_*`.
+The parser maps those codes to unchanged RUI3 status names; see
+[error-codes.md](error-codes.md). Components publish asynchronous RUI3
+events with `rzi_at_publish_event()`. The framework serializes all output,
+including events produced by other threads.
+
+## Execution and ownership
+
+`rzi_at_receive()` is ISR-safe. It copies bytes into a fixed ring buffer and
+wakes the AT thread. Parsing and command handlers never run in interrupt
+context. An RX overflow resets the partial command before reporting an overflow
+response, so truncated input cannot be executed.
+
+The selected I/O binding remains owned by the application. The UART
+adapter takes exclusive use of the selected device after successful init; the
+same UART must not also be used by the Zephyr console, shell, or logging backend.
+
+The initial implementation is process-wide and supports one active I/O adapter.
+Adding multiple simultaneous ports requires a per-session parser and response
+context; it must not introduce global response routing into command handlers.

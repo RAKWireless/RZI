@@ -41,4 +41,15 @@ config RZI_LORA_BACKEND_ZEPHYR
 
 endchoice
 
+config RZI_LORA_USP_RX_IRQ_WAKE
+	bool "Allow system STOP while P2P receive is listening (radio IRQ wake)"
+	depends on RZI_LORA_BACKEND_USP && PM
+	default y if DT_HAS_ST_STM32WL_SUBGHZ_RADIO_ENABLED
+	help
+	  Do not hold a PM reference merely because a P2P receive window is
+	  open. The radio remains in RX and its completion or timeout IRQ
+	  wakes the MCU from STOP, the USP thread queues the packet, and the
+	  wake hook unblocks the AT thread. TX, pending cancellation, and
+	  undelivered completions still hold a PM reference until drained.
+
 endif # RZI_LORA

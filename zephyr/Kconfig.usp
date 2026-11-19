@@ -14,6 +14,14 @@ config RZI_USP
 	  Modem once, serializes API calls, and routes modem events. Selected
 	  by the USP LoRaWAN and raw LoRa backends.
 
+config RZI_USP_IDLE_UNTIL_INIT
+	bool "Stay asleep until the modem is initialized"
+	depends on RZI_USP
+	help
+	  Before the modem is initialized, the USP thread waits for
+	  smtc_modem_hal_wake_up() instead of polling every 50 ms.
+	  rzi_usp_unlock() issues that wake.
+
 # Sourced before the USP Kconfig, so these are the first choice defaults
 # and win over LOG_LEVEL_DEFAULT. LBM traces use the USP "lorawan" module.
 if LOG && USP

@@ -1,0 +1,16 @@
+diff --git a/subsys/usp/zephyr_usp_thread.c b/subsys/usp/zephyr_usp_thread.c
+index ff8f762..01d9dfd 100644
+--- a/subsys/usp/zephyr_usp_thread.c
++++ b/subsys/usp/zephyr_usp_thread.c
+@@ -119,7 +119,11 @@ static void usp_main_thread( void* p1, void* p2, void* p3 )
+ #if defined( CONFIG_USP_THREADS_MUTEXES )
+             k_mutex_unlock( &rac_api_mutex );
+ #endif
++#if defined( CONFIG_RZI_USP_IDLE_UNTIL_INIT )
++            smtc_modem_hal_interruptible_msleep( K_FOREVER );
++#else
+             smtc_modem_hal_interruptible_msleep( K_MSEC( 50 ) );
++#endif
+             continue;
+         }
+         sleep_time_ms = smtc_modem_run_engine( );

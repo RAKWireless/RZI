@@ -37,12 +37,20 @@ struct rzi_lora_backend_api {
 	int (*test_cw)(uint32_t frequency_hz, int8_t power_dbm, uint32_t duration_ms);
 	/** Stop an ongoing radio test. */
 	int (*test_stop)(void);
+	/** True while RX is actually active, including continuous RX between packets. */
+	bool (*receive_active)(void);
 	/** Poll for deferred receive results. */
 	void (*poll)(void);
 };
 
 /** Selected backend, supplied by one backend translation unit. */
 extern const struct rzi_lora_backend_api rzi_lora_backend;
+
+/** Register an internal wake callback invoked when poll() has deferred work. */
+void rzi_lora_set_poll_wakeup(void (*wakeup)(void));
+
+/** Notify the registered wake listener that poll() has deferred work. */
+void rzi_lora_notify_poll(void);
 
 /** Publish a completed P2P uplink to registered callbacks. */
 void rzi_lora_publish_tx_done(int error);

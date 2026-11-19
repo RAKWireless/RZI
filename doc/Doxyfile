@@ -68,32 +68,11 @@ INPUT                  = ../include/rzi \
                          ../CONTRIBUTING.md \
                          ../.github/SECURITY.md \
                          README.md \
-                         architecture.md \
-                         usp-stack.md \
-                         boot.md \
-                         power.md \
-                         power-api.md \
-                         west-patch.md \
-                         lorawan-api.md \
-                         lora-api.md \
-                         network-mode-api.md \
-                         api-design.md \
-                         lorawan-backends.md \
-                         lorawan-backend-zephyr.md \
-                         fuota.md \
-                         storage-api.md \
-                         at-framework.md \
-                         at-command-compatibility.md \
-                         rui3-mapping.md \
-                         rui3-gap.md \
-                         sbom.md \
-                         security.md \
-                         ci.md \
-                         maintainer-workflow.md \
-                         coding-standards.md \
-                         naming-conventions.md \
-                         api-docs.md \
-                         error-codes.md
+                         architecture \
+                         api \
+                         api-design \
+                         development \
+                         compatibility
 FILE_PATTERNS          = *.h \
                          *.md
 RECURSIVE              = YES
@@ -128,6 +107,7 @@ HAVE_DOT               = NO
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
+HTML_EXTRA_STYLESHEET  = doxygen-extra.css
 GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 FULL_SIDEBAR           = NO

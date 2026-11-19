@@ -2,72 +2,33 @@
 
 Status: index
 
-In-tree copies are English. File names are lowercase kebab-case and do not
-repeat `rzi`.
+<a id="rzi-docs-home"></a>
 
-Every page uses the same front matter: a short title, a `Status:` line, a
-purpose paragraph, and `See also:` links to peer documents. Status values:
+Start with the [repository setup guide](https://github.com/RAKWireless/RZI#setup),
+then choose a topic below. Documentation is maintained in English.
 
-| Status | Meaning |
+| Section | Contents |
 |---|---|
-| index | This catalog |
-| normative | Rules new code must follow |
-| implemented | Describes current source |
-| evaluation | Findings from a second implementation |
-| superseded | Kept only so old links resolve |
+| [Architecture and boards](architecture/index.md) | SDK ownership, boards, device trees, boot, power, USP, patches. |
+| [API design](api-design/index.md) | Design principles, ownership, call paths, and backend behavior. |
+| [Service APIs](api/index.md) | Contracts, backends, storage, power, and AT. |
+| [Development and maintenance](development/index.md) | Coding, Doxygen, CI, reviews, releases, SBOM, security. |
+| [Compatibility and migration](compatibility/index.md) | AT compatibility, RUI3 migration mappings, and backend differences. |
 
-`include/rzi/` is the ABI. These Markdown files explain ownership, build
-switches, and limits that do not belong in a header comment.
+Each page identifies its status: normative rules, implemented behavior,
+evaluation findings, an index, or superseded material. Public declarations
+under include/rzi remain the ABI. Source review, build results, host tests,
+and hardware acceptance are separate forms of evidence.
 
-## Architecture and boot
+## Build the documentation
 
-| Document | Status | Contents |
-|---|---|---|
-| [architecture.md](./architecture.md) | implemented | Layers, ownership, backend policy |
-| [usp-stack.md](./usp-stack.md) | implemented | RZI on USP / usp_zephyr / LBM, traced call chains |
-| [boot.md](./boot.md) | implemented | Product boards, MCUBoot, slots, merged image |
-| [power.md](./power.md) | implemented | Policy, PM locks, both boards |
-| [west-patch.md](./west-patch.md) | implemented | Upstream compatibility patches |
+From the repository root:
 
-## Service APIs
-
-| Document | Status | Contents |
-|---|---|---|
-| [error-codes.md](./error-codes.md) | normative | Closed `RZI_ERR_*` catalog |
-| [lorawan-api.md](./lorawan-api.md) | normative | LoRaWAN public C contract |
-| [lora-api.md](./lora-api.md) | implemented | Raw LoRa / FSK P2P C contract |
-| [lorawan-backends.md](./lorawan-backends.md) | implemented | USP vs Zephyr build switch |
-| [lorawan-backend-zephyr.md](./lorawan-backend-zephyr.md) | evaluation | Zephyr `lorawan_*` adapter |
-| [fuota.md](./fuota.md) | implemented | ChirpStack FUOTA (dual-slot) |
-| [network-mode-api.md](./network-mode-api.md) | implemented | Network working-mode persistence |
-| [storage-api.md](./storage-api.md) | implemented | Namespaced key-value storage |
-| [power-api.md](./power-api.md) | implemented | `rzi_power_*` C contract |
-| [at-framework.md](./at-framework.md) | implemented | AT framework, registry, adapters |
-| [at-command-compatibility.md](./at-command-compatibility.md) | implemented | Registered commands vs RUI3 |
-| [rui3-mapping.md](./rui3-mapping.md) | implemented | Public C ABI mapped from RUI3, plus C-level gaps |
-| [rui3-gap.md](./rui3-gap.md) | superseded | Redirect to rui3-mapping and AT compatibility |
-
-## Standards
-
-The [contribution guide](../CONTRIBUTING.md) covers the development and review
-workflow, including commit organization, rebase, DCO, and local validation.
-
-| Document | Status | Contents |
-|---|---|---|
-| [api-design.md](./api-design.md) | normative | Public C API design framework and ownership rules |
-| [coding-standards.md](./coding-standards.md) | normative | Layout, naming, errors, commits |
-| [api-docs.md](./api-docs.md) | normative | Doxygen and compiler annotations |
-| [sbom.md](./sbom.md) | implemented | SPDX 3 firmware and module SBOMs, minimum elements, releases |
-| [security.md](./security.md) | normative | Vulnerability reporting, triage, VEX, CRA timelines |
-| [ci.md](./ci.md) | implemented | CI jobs, version pins, local reproduction |
-| [maintainer-workflow.md](./maintainer-workflow.md) | normative | Review, merge gates, GitHub rulesets, release procedure |
-| [naming-conventions.md](./naming-conventions.md) | superseded | Redirect to coding standards §3 |
-
-## Doxygen
-
-```bash
+```sh
 tools/docs/generate-doxygen.sh
+tools/docs/generate-mdbook.sh
 ```
 
-Opens `doc/doxygen/html/index.html`. Generated HTML is not committed.
-Rules are in [api-docs.md](./api-docs.md).
+Doxygen writes doc/doxygen/html/index.html. mdBook writes doc/book/index.html.
+Both outputs are generated and ignored by Git. Neither build requires SVG
+assets or a diagram-rendering plugin. See [documentation rules](development/api-docs.md).

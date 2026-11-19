@@ -29,6 +29,8 @@ mkdir -p "${OUT}"
 	doxygen "${DOXYFILE}"
 )
 
+python3 "${REPO}/tools/docs/resolve-doxygen-links.py" "${OUT}/html"
+
 echo "doxygen: HTML at ${OUT}/html/index.html"
 if [[ -s "${OUT}/warnings.log" ]]; then
 	echo "doxygen: warnings written to ${OUT}/warnings.log"

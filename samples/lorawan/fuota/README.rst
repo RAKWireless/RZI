@@ -18,8 +18,10 @@ handle clock sync, Class C multicast and image reconstruction.
 Clock Synchronization (FPort 202), Remote Multicast Setup (FPort 200) and
 Fragmentation (FPort 201) remain inside LoRa Basics Modem.
 
-``application_key`` in the OTAA join config is the LoRaWAN 1.0.x
-**GenAppKey**. It must match the ChirpStack device Gen App Key.
+Provision AppKey through ``rzi_lorawan_set_app_key()`` and GenAppKey
+through ``rzi_lorawan_set_gen_app_key()``. The latter must match the
+ChirpStack device Gen App Key; applications do not construct private join
+configuration structures.
 
 Requirements
 ************
@@ -31,7 +33,7 @@ Requirements
 * A short expected uplink interval in the device-profile, for example 5 s
 * Valid OTAA identifiers, AppKey and GenAppKey
 
-See ``doc/fuota.md`` for the ChirpStack deployment checklist and image-size
+See ``doc/api/fuota.md`` for the ChirpStack deployment checklist and image-size
 limits of the default LBM context partition.
 
 Building
@@ -48,7 +50,7 @@ Flash ``build/merged_rak3372_f_stm32wle5xx.hex``.
 
 Credentials are in ``app.overlay``, with the same properties as
 ``samples/lorawan/periodical_uplink``; here GenAppKey is required.
-Flash ``build/merged_rak4631_nrf52840_rzi.hex``. See ``doc/boot.md``.
+Flash ``build/merged_rak4631_nrf52840_rzi.hex``. See ``doc/architecture/boot.md``.
 
 FUOTA needs the secondary image slot. This sample builds for
 ``rak4631/nrf52840/rzi`` and ``rak3372_f`` (slot1 on the MX25L400).
@@ -87,7 +89,7 @@ Joined, but no ``FUOTA transfer started``
 
 ``FUOTA failed: RZI_ERR_*``
    The name comes from ``include/rzi/err.h``. Compare it with the deployment
-   status in ChirpStack, and check the image-size limits in ``doc/fuota.md``.
+   status in ChirpStack, and check the image-size limits in ``doc/api/fuota.md``.
 
 Join problems
    See the troubleshooting section of ``samples/lorawan/periodical_uplink``.

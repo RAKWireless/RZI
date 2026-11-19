@@ -15,6 +15,7 @@
 #include "../../at_priv.h"
 #include "../at_network_mode.h"
 #include "at_lora_priv.h"
+#include "../../../lora/backend/lora_backend.h"
 
 static __maybe_unused void ignore_result(int result)
 {
@@ -173,6 +174,7 @@ static int extension_init(void)
 	if (rc != 0) {
 		return rc;
 	}
+	rzi_lora_set_poll_wakeup(rzi_at_wake);
 	p2p_start_pending = rzi_at_get_network_mode() != RZI_NETWORK_MODE_LORAWAN;
 	return 0;
 }

@@ -128,10 +128,6 @@ static int fake_join(const struct rzi_lorawan_join_config *config)
 	if (fake_join_error != 0) {
 		return fake_join_error;
 	}
-	if (config->activation == RZI_LORAWAN_ACTIVATION_ABP &&
-	    !IS_ENABLED(CONFIG_RZI_LORAWAN_TEST_FAKE_SUPPORTS_ABP)) {
-		return -RZI_ERR_NOT_SUPPORTED;
-	}
 	if (config->activation != RZI_LORAWAN_ACTIVATION_OTAA &&
 	    config->activation != RZI_LORAWAN_ACTIVATION_ABP) {
 		return -RZI_ERR_NOT_SUPPORTED;
@@ -726,7 +722,6 @@ static int fake_get_protocol_version(const char **version)
 
 const struct rzi_lorawan_backend_api rzi_lorawan_backend = {
 	.capabilities = FAKE_CAPABILITIES,
-	.supports_abp = IS_ENABLED(CONFIG_RZI_LORAWAN_TEST_FAKE_SUPPORTS_ABP),
 	.base.init = fake_init,
 	.base.stop = fake_stop,
 	.base.deinit = fake_deinit,

@@ -11,6 +11,8 @@
 /doc/reqmgmt/
 # Generated Doxygen HTML (tools/docs/generate-doxygen.sh)
 /doc/doxygen/
+# Generated mdBook HTML (mdbook build in doc/)
+/doc/book/
 
 # Written by tools/ci/check-compliance.sh from the Zephyr tree, then removed
 /.checkpatch.conf

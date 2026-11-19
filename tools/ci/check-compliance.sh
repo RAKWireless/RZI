@@ -86,11 +86,14 @@ trap cleanup EXIT
 
 # checkpatch.pl loads ./.checkpatch.conf and resolves --typedefsfile from
 # the repository root. Point it at the Zephyr tree. EXECUTE_PERMISSIONS is
-# the one local addition: hook and helper scripts must stay executable.
+# ignored so hook and helper scripts stay executable; zephyr/patches is
+# excluded because unified diffs carry leading-space blank context lines.
 if [[ ! -e "${REPO}/.checkpatch.conf" ]]; then
 	sed -e "s|^--typedefsfile=.*|--typedefsfile=${ZEPHYR_BASE}/scripts/checkpatch/typedefsfile|" \
 		"${ZEPHYR_BASE}/.checkpatch.conf" > "${REPO}/.checkpatch.conf"
-	printf '%s\n' '--ignore EXECUTE_PERMISSIONS' >> "${REPO}/.checkpatch.conf"
+	printf '%s\n' \
+		'--ignore EXECUTE_PERMISSIONS' \
+		'--exclude zephyr/patches' >> "${REPO}/.checkpatch.conf"
 	created_conf=1
 fi
 

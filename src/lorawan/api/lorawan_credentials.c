@@ -249,13 +249,7 @@ static uint8_t njm_wire(enum rzi_lorawan_activation mode)
 
 static bool activation_supported(enum rzi_lorawan_activation mode)
 {
-	if (mode == RZI_LORAWAN_ACTIVATION_OTAA) {
-		return true;
-	}
-	if (mode == RZI_LORAWAN_ACTIVATION_ABP) {
-		return rzi_lorawan_backend.supports_abp;
-	}
-	return false;
+	return mode == RZI_LORAWAN_ACTIVATION_OTAA || mode == RZI_LORAWAN_ACTIVATION_ABP;
 }
 
 int rzi_lorawan_get_dev_eui(uint8_t *eui, size_t len)
@@ -462,9 +456,7 @@ int rzi_lorawan_set_activation(enum rzi_lorawan_activation mode)
 		return rc;
 	}
 	if (!activation_supported(mode)) {
-		return mode == RZI_LORAWAN_ACTIVATION_OTAA || mode == RZI_LORAWAN_ACTIVATION_ABP
-			       ? -RZI_ERR_NOT_SUPPORTED
-			       : -RZI_ERR_INVALID;
+		return -RZI_ERR_INVALID;
 	}
 
 	k_mutex_lock(&credential_lock, K_FOREVER);

@@ -196,6 +196,13 @@ int rzi_at_receive(const uint8_t *data, size_t size)
 	return written == size ? 0 : -RZI_ERR_OVERFLOW;
 }
 
+void rzi_at_wake(void)
+{
+	if (atomic_get(&active)) {
+		k_sem_give(&rx_ready);
+	}
+}
+
 static void process_input(void)
 {
 	uint8_t buffer[64];
@@ -218,8 +225,10 @@ static void thread_entry(void *unused1, void *unused2, void *unused3)
 	ARG_UNUSED(unused2);
 	ARG_UNUSED(unused3);
 
+	/* Deferred startup must not depend on the first UART byte. */
+	rzi_at_registry_process_extensions();
 	for (;;) {
-		(void)k_sem_take(&rx_ready, K_MSEC(CONFIG_RZI_AT_PROCESS_INTERVAL_MS));
+		(void)k_sem_take(&rx_ready, K_FOREVER);
 		process_input();
 		rzi_at_registry_process_extensions();
 	}

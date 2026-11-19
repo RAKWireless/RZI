@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless
+# SPDX-License-Identifier: Apache-2.0
+# Chapter-based HTML view of the maintained Markdown sources.
+# Build from the repository root: tools/docs/generate-mdbook.sh
+# The generator stages only sources, excluding previous build output.
+
+[book]
+title = "RZI SDK Documentation"
+authors = ["RAKWireless"]
+language = "en"
+src = "."
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/RAKWireless/RZI"
+git-repository-icon = "fab-github"
+edit-url-template = "https://github.com/RAKWireless/RZI/edit/main/doc/{path}"
+additional-css = []
+additional-js = []
+
+[output.html.search]
+heading-split-level = 2
+
+# Keep each chapter on its own page; no combined print-all page.
+[output.html.print]
+enable = false

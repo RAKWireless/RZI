@@ -6,6 +6,68 @@
 / {
 	chosen {
 		zephyr,lorawan-transceiver = &lora;
+		lora-basics-modem-context-partition = &lora_context_partition;
+	};
+};
+
+/*
+ * Same map as rak4631-rzi-partitions.dtsi. Boot and both slots match
+ * upstream Zephyr rak4631.dts. An Arduino loader and an RZI application
+ * replace each other in slot0, so the sketch, settings, and the modem
+ * context use the same tail addresses.
+ */
+&flash0 {
+	/delete-node/ partitions;
+};
+
+&flash0 {
+	partitions {
+		compatible = "fixed-partitions";
+		ranges;
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		boot_partition: partition@0 {
+			compatible = "zephyr,mapped-partition";
+			label = "mcuboot";
+			reg = <0x00000000 0x00010000>;
+		};
+
+		slot0_partition: partition@10000 {
+			compatible = "zephyr,mapped-partition";
+			label = "image-0";
+			reg = <0x00010000 0x00060000>;
+		};
+
+		slot1_partition: partition@70000 {
+			compatible = "zephyr,mapped-partition";
+			label = "image-1";
+			reg = <0x00070000 0x00060000>;
+		};
+
+		user_sketch: partition@d0000 {
+			compatible = "zephyr,mapped-partition";
+			label = "user";
+			reg = <0x000d0000 0x00028000>;
+		};
+
+		storage_partition: partition@f8000 {
+			compatible = "zephyr,mapped-partition";
+			label = "storage";
+			reg = <0x000f8000 0x00006000>;
+		};
+
+		lora_context_partition: partition@fe000 {
+			compatible = "zephyr,mapped-partition";
+			label = "lora_context";
+			reg = <0x000fe000 0x00002000>;
+		};
+	};
+};
+
+/ {
+	chosen {
+		zephyr,code-partition = &slot0_partition;
 	};
 };
 

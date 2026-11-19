@@ -6,7 +6,7 @@
 # twister --integration, plus REUSE, public-header, Doxygen,
 # and SPDX 3 / CycloneDX SBOM checks. Releases: release.yml.
 #
-# Version pins and local reproduction steps are documented in doc/ci.md.
+# Version pins and local reproduction steps are documented in doc/development/ci.md.
 
 name: CI
 

@@ -51,15 +51,16 @@ RZI does not hardcode any flash address. The storage area is board-defined
 through devicetree, following the standard Zephyr convention:
 
 * a partition labeled ``storage_partition`` in the RZI product-board
-  partition table (``rak4631/nrf52840/rzi`` places 32 KiB at the end of internal flash), or
+  partition table (``rak4631/nrf52840/rzi`` places 24 KiB at ``0xf8000``), or
 * a ``zephyr,settings-partition`` chosen node pointing at any partition,
   including one on external SPI flash.
 
 Boards without either definition fail at build time instead of writing to a
 wrong address at runtime. ``AT+JOIN`` supports the RUI3 start, auto-join,
-retry-interval and retry-count parameters. ABP remains a planned service.
+retry-interval and retry-count parameters. OTAA and ABP are supported;
+select ABP with ``AT+NJM=0`` and provision DevAddr, NwkSKey and AppSKey.
 
-See ``doc/at-command-compatibility.md`` for the complete command reference and
+See ``doc/compatibility/at-commands.md`` for the complete command reference and
 the precise compatibility limits compared with RUI3.
 
 Requirements
@@ -68,7 +69,7 @@ Requirements
 * An RZI RAK4631 (``rak4631/nrf52840/rzi``) with its LoRa antenna connected
 * For LoRaWAN mode: a gateway, a network server and valid OTAA identifiers
   and keys
-* For P2P mode: a second board running this sample or ``samples/lora/ping_pong``
+* For P2P mode: a second board running this AT sample in P2P mode
 
 Set keys at runtime with ``AT+DEVEUI``, ``AT+APPEUI`` and ``AT+APPKEY``.
 Hardware and the AT UART alias live on the product board.
@@ -104,7 +105,7 @@ From the workspace root:
 
    west build -p always -b rak4631/nrf52840/rzi --sysbuild rzi/samples/at
 
-Flash ``build/merged_rak4631_nrf52840_rzi.hex``. See ``doc/boot.md``.
+Flash ``build/merged_rak4631_nrf52840_rzi.hex``. See ``doc/architecture/boot.md``.
 
 For RAK3362, use ``-b rak3362/nrf54l15/cpuapp``.
 

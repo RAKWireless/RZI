@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include <zephyr/kernel.h>
+#include <zephyr/spinlock.h>
 #include <zephyr/sys/atomic.h>
 
 #include <rzi/lora/lora.h>
@@ -16,6 +17,8 @@
 #include "backend/lora_backend.h"
 
 static K_MUTEX_DEFINE(lock);
+static struct k_spinlock wake_lock;
+static void (*poll_wakeup)(void);
 static atomic_t active;
 static enum rzi_lora_modulation modulation = RZI_LORA_MOD_LORA;
 static struct rzi_lora_config config = {
@@ -257,7 +260,30 @@ int rzi_lora_receive(uint32_t timeout_ms)
 
 bool rzi_lora_receive_active(void)
 {
+	if (rzi_lora_backend.receive_active != NULL) {
+		return rzi_lora_backend.receive_active();
+	}
 	return atomic_get(&rx_active) != 0;
+}
+
+void rzi_lora_set_poll_wakeup(void (*wakeup)(void))
+{
+	k_spinlock_key_t key = k_spin_lock(&wake_lock);
+
+	poll_wakeup = wakeup;
+	k_spin_unlock(&wake_lock, key);
+}
+
+void rzi_lora_notify_poll(void)
+{
+	void (*wakeup)(void);
+	k_spinlock_key_t key = k_spin_lock(&wake_lock);
+
+	wakeup = poll_wakeup;
+	k_spin_unlock(&wake_lock, key);
+	if (wakeup != NULL) {
+		wakeup();
+	}
 }
 
 void rzi_lora_poll(void)

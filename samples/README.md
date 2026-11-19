@@ -7,7 +7,7 @@ for an application choice, such as the FUOTA console or disabling USB for
 the AT port on a board without a USB controller.
 
 Build any sample from the workspace root with sysbuild, then flash
-`build/merged_<board>.hex` (see [`doc/boot.md`](../doc/boot.md)):
+`build/merged_<board>.hex` (see [`doc/architecture/boot.md`](../doc/architecture/boot.md)):
 
 ```sh
 west build -p always -b rak4631/nrf52840/rzi --sysbuild rzi/samples/<path>

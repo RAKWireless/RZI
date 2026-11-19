@@ -30,13 +30,3 @@ tests:
       - native_sim
     extra_configs:
       - CONFIG_RZI_POWER=y
-  rzi.lorawan.service.no_abp:
-    tags:
-      - rzi
-      - lorawan
-    platform_allow:
-      - native_sim
-    integration_platforms:
-      - native_sim
-    extra_configs:
-      - CONFIG_RZI_LORAWAN_TEST_FAKE_SUPPORTS_ABP=n

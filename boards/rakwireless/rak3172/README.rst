@@ -58,7 +58,7 @@ The RZI-owned USP STM32WL patches remain required: the driver enumerates
 the on-chip radio, controls its RF switch and RCC reset, and masks/rearms
 EXTI44 correctly. The variant alone does not replace those driver patches.
 TCXO-reset handling remains conditional and is not enabled on this target.
-See ``doc/west-patch.md`` for the patch workflow. Do not clean or reapply
+See ``doc/architecture/west-patch.md`` for the patch workflow. Do not clean or reapply
 patches over local module changes just to select this board.
 
 Build

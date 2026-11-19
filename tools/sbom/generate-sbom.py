@@ -442,7 +442,7 @@ def write_spdx3(
             "comment": (
                 "Source-level SBOM of the RZI Zephyr module at a single commit and "
                 "the projects it pins in west.yml. Firmware images need their own "
-                "SBOM from west spdx; see doc/sbom.md."
+                "SBOM from west spdx; see doc/development/sbom.md."
             ),
         },
         "document",

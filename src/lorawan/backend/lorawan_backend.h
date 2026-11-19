@@ -188,8 +188,6 @@ struct rzi_lorawan_base_ops {
 struct rzi_lorawan_backend_api {
 	/** Bitwise OR of enum rzi_lorawan_capability values. */
 	uint32_t capabilities;
-	/** True when this backend can join with ABP. OTAA is always accepted. */
-	bool supports_abp;
 	/** Base operations; get_class and get_protocol_version may be NULL. */
 	struct rzi_lorawan_base_ops base;
 	/** MAC-parameter table, or NULL. */

@@ -1,7 +1,6 @@
 CompileFlags:
-  CompilationDatabase: build/rzi-periodical-uplink-3372/periodical_uplink
-  Add:
-    - --target=arm-none-eabi
+  # Select a build locally via compile_commands.json or --compile-commands-dir.
+  CompilationDatabase: Ancestors
   Remove:
     - -mfp16-format=*
     - -fno-printf-return-value

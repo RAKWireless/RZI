@@ -1,0 +1,12 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/* Doxygen checklists use a hanging indent. Its inline-block code elements
+ * inherit that indent and shift their text over the preceding prose.
+ * Keep code text aligned with the box allocated by inline layout.
+ */
+.contents code,
+.contents tt,
+.contents kbd {
+  text-indent: 0;
+}

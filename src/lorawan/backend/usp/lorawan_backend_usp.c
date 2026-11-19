@@ -810,7 +810,6 @@ static int usp_deinit(void)
 
 const struct rzi_lorawan_backend_api rzi_lorawan_backend = {
 	.capabilities = USP_CAPABILITIES,
-	.supports_abp = true,
 	.base.init = usp_init,
 	.base.stop = usp_stop,
 	.base.deinit = usp_deinit,
@@ -831,7 +830,9 @@ const struct rzi_lorawan_backend_api rzi_lorawan_backend = {
 #ifdef CONFIG_LORA_BASICS_MODEM_MULTICAST
 	.multicast = &usp_multicast_ops,
 #endif
+#ifdef CONFIG_LORA_BASICS_MODEM_CERTIFICATION
 	.certification = &usp_cert_ops,
+#endif
 #ifdef CONFIG_RZI_LORAWAN_FUOTA
 	.fuota = &usp_fuota_ops,
 #endif
