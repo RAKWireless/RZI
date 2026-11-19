@@ -1,3 +1,5 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless */
+/* SPDX-License-Identifier: Apache-2.0 */
 /*
  * rak3372_f flash map.
  *
@@ -10,22 +12,6 @@
  * image-1.
  */
 
-/*
- * RAK3372-F flash map (overwrite-only MCUBoot).
- *
- * Internal STM32WLE5 flash (256 KB):
- *   48K boot + 208K slot0.
- *
- * On-module MX25L400 (512 KB):
- *   208K slot1 + 8K storage + 8K lora_context.
- * Remaining external space is unused.
- *
- * Settings / NVS and LoRa Basics Modem context live on external flash so
- * slot0 can use the full remaining internal flash after the bootloader.
- * slot0 and slot1 stay the same size for overwrite-only MCUBoot.
- *
- * The board .yml requires the SPI NOR so MCUboot can read image-1.
- */
 / {
 	chosen {
 		zephyr,sram = &sram0;
