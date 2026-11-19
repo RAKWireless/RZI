@@ -1,6 +1,13 @@
 /*
- * SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless
- * SPDX-License-Identifier: Apache-2.0
+ * rak3372_f flash map.
+ *
+ * Internal STM32WLE5 flash is 256 KiB: 48K boot + 208K slot0. MCUboot is
+ * larger than on RAK3372 because it has to read the MX25L400. The 512 KiB
+ * NOR holds a 208K slot1, an 8 KiB scratch area (two 4 KiB sectors), a
+ * 32 KiB FUOTA delta area, then 8 KiB settings and 8 KiB LoRaWAN context.
+ * MCUboot swaps the slots through scratch. An unconfirmed test image
+ * reverts on the next boot. LoRaWAN FUOTA writes the signed image to
+ * image-1.
  */
 
 /*
@@ -25,6 +32,7 @@
 		zephyr,flash = &flash0;
 		zephyr,code-partition = &slot0_partition;
 		lora-basics-modem-context-partition = &lora_context_partition;
+		rzi,fuota-delta-partition = &fuota_delta_partition;
 	};
 };
 
@@ -60,14 +68,26 @@
 			reg = <0x00000000 DT_SIZE_K(208)>;
 		};
 
-		storage_partition: partition@34000 {
-			label = "storage";
+		/* Two 4 KiB NOR sectors. MCUboot uses this only in swap-using-scratch. */
+		scratch_partition: partition@34000 {
+			label = "image-scratch";
 			reg = <0x00034000 DT_SIZE_K(8)>;
 		};
 
-		lora_context_partition: partition@36000 {
+		/* Reassembly space for a FUOTA delta. Not consumed by the current apply path. */
+		fuota_delta_partition: partition@36000 {
+			label = "fuota_delta";
+			reg = <0x00036000 DT_SIZE_K(32)>;
+		};
+
+		storage_partition: partition@3e000 {
+			label = "storage";
+			reg = <0x0003e000 DT_SIZE_K(8)>;
+		};
+
+		lora_context_partition: partition@40000 {
 			label = "lora_context";
-			reg = <0x00036000 DT_SIZE_K(8)>;
+			reg = <0x00040000 DT_SIZE_K(8)>;
 		};
 	};
 };

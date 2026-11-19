@@ -3,8 +3,8 @@
 /*
  * Product board for the RAK3372-F (RAK3172-F WisDuo module, STM32WLE5JC + MX25L400).
  * Radio is the STM32WLE5 on-chip SUBGHZ (st,stm32wl-subghz-radio).
- * image-1 is the on-module SPI NOR, so LoRaWAN FUOTA installs by
- * overwrite. USP support is the STM32WL west patch in
+ * image-1 is the on-module SPI NOR. MCUboot swaps it with slot0
+ * through image-scratch. USP support is the STM32WL west patch in
  * zephyr/patches/usp_zephyr.
  * RUI3 default serial is lpuart1 (PA2/PA3, 115200). That is the console,
  * the AT port, and the RAK19007 USB-UART. UART1 remains usart1 (PB6/PB7).
