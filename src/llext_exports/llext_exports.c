@@ -7,6 +7,7 @@
 
 #include <zephyr/llext/symbol.h>
 
+#include <rzi/boot.h>
 #include <rzi/err.h>
 #include <rzi/init.h>
 #include <rzi/network_mode.h>
@@ -18,6 +19,10 @@ EXPORT_SYMBOL(rzi_init);
 EXPORT_SYMBOL(rzi_err_str);
 EXPORT_SYMBOL(rzi_err_from_errno);
 EXPORT_SYMBOL(rzi_version_get_string);
+EXPORT_SYMBOL(rzi_boot_classify);
+EXPORT_SYMBOL(rzi_boot_state_name);
+EXPORT_SYMBOL(rzi_boot_swap_name);
+EXPORT_SYMBOL(rzi_boot_get_status);
 
 #if defined(CONFIG_RZI_LORAWAN)
 #include <rzi/lorawan/certification.h>
