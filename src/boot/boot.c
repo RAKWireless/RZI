@@ -5,6 +5,8 @@
  * @brief MCUboot image status query.
  */
 
+#include <stddef.h>
+
 #include <rzi/boot.h>
 
 #if defined(CONFIG_MCUBOOT_IMG_MANAGER)
