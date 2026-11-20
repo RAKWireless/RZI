@@ -335,42 +335,6 @@ int uplink_log_resume_drain(void);
 /** @brief Number of queued event and config records. */
 size_t uplink_log_queue_count(void);
 
-/** @name Event Data helpers for the FUOTA domain
- *  @{
- */
-
-/** Layout A: target version (0x02-0x07, 0x11-0x16). */
-static inline void uplink_log_event_data_version(uint8_t data[4],
-						 const struct uplink_log_version *version)
-{
-	data[0] = version->major;
-	data[1] = version->minor;
-	data[2] = version->patch;
-	data[3] = version->build;
-}
-
-/** Layout B: session parameters (0x01 STARTED). */
-static inline void uplink_log_event_data_session(uint8_t data[4], uint16_t frag_nb,
-						 uint8_t frag_size, uint8_t frag_index)
-{
-	data[0] = (uint8_t)(frag_nb & 0xFFU);
-	data[1] = (uint8_t)(frag_nb >> 8);
-	data[2] = frag_size;
-	data[3] = frag_index;
-}
-
-/** Layout C: transfer statistics (0x08 FRAG_INCOMPLETE). */
-static inline void uplink_log_event_data_frag_stats(uint8_t data[4], uint16_t frag_received,
-						    uint16_t frag_nb)
-{
-	data[0] = (uint8_t)(frag_received & 0xFFU);
-	data[1] = (uint8_t)(frag_received >> 8);
-	data[2] = (uint8_t)(frag_nb & 0xFFU);
-	data[3] = (uint8_t)(frag_nb >> 8);
-}
-
-/** @} */
-
 #ifdef __cplusplus
 }
 #endif

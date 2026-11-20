@@ -15,8 +15,10 @@ callback gives; callbacks only signal and print logs.
 callbacks to observe session state and completion, and skips its periodic
 uplink while ``rzi_fuota_uplink_allowed()`` is false. RZI and the USP backend
 handle clock sync and Class C multicast. Reconstructed bytes are written to
-the MCUboot secondary slot. When the multicast window ends, RZI returns the
-device to Class A and reboots into the test upgrade.
+the MCUboot secondary slot. When the multicast window ends, RZI restores the
+class that was active before the window. A descriptor 0 image reboots into
+the test upgrade after StatusAns is sent, or after 30 seconds. A ``RAK0``
+image stays in ``fuota_delta`` and the device keeps running.
 
 Clock Synchronization (FPort 202), Remote Multicast Setup (FPort 200) and
 Fragmentation (FPort 201) remain inside LoRa Basics Modem.

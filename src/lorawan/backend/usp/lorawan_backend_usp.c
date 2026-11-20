@@ -700,12 +700,93 @@ static int usp_fuota_reboot(void)
 	return 0;
 }
 
+static int usp_fuota_stop_multicast(uint8_t group_id)
+{
+	bool active = false;
+	uint32_t frequency = 0U;
+	uint8_t data_rate = 0U;
+	int rc = rzi_lorawan_usp_enter();
+
+	if (rc != 0) {
+		return rc;
+	}
+	rc = rzi_usp_result(smtc_modem_multicast_class_c_stop_session(
+		STACK_ID, (smtc_modem_mc_grp_id_t)group_id));
+	if (rc == 0) {
+		rc = rzi_usp_result(smtc_modem_multicast_class_c_get_session_status(
+			STACK_ID, (smtc_modem_mc_grp_id_t)group_id, &active, &frequency,
+			&data_rate));
+		if (rc == 0 && active) {
+			rc = -RZI_ERR_BUSY;
+		}
+	}
+	return rzi_lorawan_usp_finish(rc);
+}
+
 static const struct rzi_lorawan_fuota_ops usp_fuota_ops = {
 	.start_clock_sync = usp_fuota_start_clock_sync,
 	.get_image_size = usp_fuota_get_image_size,
 	.read_image = usp_fuota_read_image,
 	.reboot = usp_fuota_reboot,
+	.stop_multicast = usp_fuota_stop_multicast,
 };
+
+static enum rzi_lorawan_class map_smtc_class(uint8_t lorawan_class)
+{
+	if (lorawan_class == SMTC_MODEM_CLASS_C) {
+		return RZI_LORAWAN_CLASS_C;
+	}
+	if (lorawan_class == SMTC_MODEM_CLASS_B) {
+		return RZI_LORAWAN_CLASS_B;
+	}
+	return RZI_LORAWAN_CLASS_A;
+}
+
+void smtc_modem_fuota_notify_setup(const struct smtc_modem_fuota_setup *setup)
+{
+	struct rzi_lorawan_backend_event event = {0};
+
+	if (setup == NULL) {
+		return;
+	}
+	event.type = RZI_LORAWAN_BACKEND_FUOTA;
+	event.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_SETUP_ACCEPTED;
+	event.fuota.successful = true;
+	event.fuota.generation = setup->generation;
+	event.fuota.descriptor = setup->descriptor;
+	event.fuota.frag_nb = setup->frag_nb;
+	event.fuota.frag_size = setup->frag_size;
+	event.fuota.padding = setup->padding;
+	event.fuota.frag_index = setup->frag_index;
+	event.fuota.mc_group_bit_mask = setup->mc_group_bit_mask;
+	event.fuota.frag_algo = setup->frag_algo;
+	event.fuota.block_ack_delay = setup->block_ack_delay;
+	rzi_lorawan_usp_publish(&event);
+}
+
+void smtc_modem_fuota_notify_class(uint8_t lorawan_class, uint8_t group_id)
+{
+	struct rzi_lorawan_backend_event event = {0};
+
+	event.type = RZI_LORAWAN_BACKEND_FUOTA;
+	event.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_CLASS_CAPTURED;
+	event.fuota.successful = true;
+	event.fuota.original_class = map_smtc_class(lorawan_class);
+	event.fuota.multicast_group = group_id;
+	rzi_lorawan_usp_publish(&event);
+}
+
+void smtc_modem_fuota_notify_control(uint32_t generation, uint8_t control)
+{
+	struct rzi_lorawan_backend_event event = {0};
+
+	event.type = RZI_LORAWAN_BACKEND_FUOTA;
+	event.fuota.kind = RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE;
+	event.fuota.successful = true;
+	event.fuota.generation = generation;
+	event.fuota.control = control;
+	rzi_lorawan_usp_publish(&event);
+}
 
 #endif
 

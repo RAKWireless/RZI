@@ -23,11 +23,13 @@ extern "C" {
  *
  *  LoRaWAN Clock Synchronization, Remote Multicast Setup and Fragmentation
  *  remain inside the selected backend. On USP the fragmentation descriptor
- *  selects the store. Descriptor 0 writes the MCUboot secondary slot; after
- *  the multicast window the service returns the device to Class A, requests
- *  a test upgrade and reboots. Descriptor 0x304B4152 (bytes 52 41 4B 30,
- *  ASCII RAK0) writes the fuota_delta partition and leaves the device
- *  running. Any other descriptor is rejected. The image is not checked here.
+ *  selects the store. Descriptor 0 writes the MCUboot secondary slot. After
+ *  the multicast window the service restores the class that was active when
+ *  the window was accepted, then waits for a local StatusAns transmission or
+ *  30 seconds before the test upgrade and reboot. Descriptor 0x304B4152
+ *  (bytes 52 41 4B 30, ASCII RAK0) writes the fuota_delta partition and leaves
+ *  the device running. Any other descriptor is rejected. The image is not
+ *  checked here.
  *
  *  @since 0.1.0
  *  @version 0.1.0
@@ -125,10 +127,39 @@ __must_check int rzi_fuota_init(void);
 __must_check int rzi_fuota_get_status(struct rzi_fuota_status *status);
 
 /**
+ * @brief One accepted fragmentation round.
+ *
+ * storage_errno is zero when no reconstructed-byte write has failed.
+ */
+struct rzi_fuota_round {
+	/** Generation assigned when this setup was accepted. Never zero. */
+	uint32_t generation;
+	/** True after a reconstructed-byte write has failed. */
+	bool write_failed;
+	/** First flash error, or zero when the writes succeeded. */
+	int storage_errno;
+};
+
+/**
+ * @brief Copy the accepted fragmentation round.
+ *
+ * @param[out] out Caller-owned round object.
+ *
+ * @retval 0 Round copied.
+ * @retval -RZI_ERR_INVALID out is NULL.
+ * @retval -RZI_ERR_NOT_FOUND No setup has been accepted for the current round.
+ * @retval -RZI_ERR_ISR Called from an ISR.
+ *
+ * @note Thread context only.
+ */
+__must_check int rzi_fuota_get_round(struct rzi_fuota_round *out);
+
+/**
  * @brief Report whether an application uplink may be sent.
  *
- * Returns false while a multicast fragment window is open and while an
- * upgrade reboot is being requested.
+ * Returns false while a multicast fragment window is open, while an upgrade
+ * reboot is being requested, and while a fragmentation or multicast answer
+ * is still queued.
  *
  * @retval true Application uplinks may be sent.
  * @retval false A FUOTA window or installation owns the radio.
@@ -176,8 +207,9 @@ __must_check int rzi_fuota_read_image(size_t offset, void *buffer, size_t size);
  *
  * On USP a descriptor 0 image is already in the secondary slot. This writes
  * the upgrade trailer and reboots. The service calls it after the multicast
- * window when that reconstruction succeeded. A delta session does not call
- * this; calling it then returns -RZI_ERR_NOT_SUPPORTED. The function does
+ * window, once StatusAns has been sent or 30 seconds have elapsed. A delta
+ * session does not call this; calling it then returns -RZI_ERR_NOT_SUPPORTED.
+ * The function does
  * not return on a successful reboot.
  *
  * @retval -RZI_ERR_NOT_FOUND No reconstructed image is available.

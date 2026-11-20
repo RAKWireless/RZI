@@ -61,6 +61,12 @@ enum rzi_lorawan_backend_fuota_kind {
 	RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE,
 	/** Firmware Management Package requested a reboot. */
 	RZI_LORAWAN_BACKEND_FUOTA_REBOOT_REQUESTED,
+	/** A FragSessionSetup was accepted and the decoder was started. */
+	RZI_LORAWAN_BACKEND_FUOTA_SETUP_ACCEPTED,
+	/** Class captured when a Class C window was accepted, before it starts. */
+	RZI_LORAWAN_BACKEND_FUOTA_CLASS_CAPTURED,
+	/** A fragmentation StatusAns or DeleteAns finished local transmission. */
+	RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE,
 };
 
 /**
@@ -113,6 +119,23 @@ struct rzi_lorawan_backend_event {
 			bool successful;
 			/** Reconstructed image size in bytes, or zero if unknown. */
 			uint32_t image_size;
+			/** Fragmentation generation. Zero means the event has none. */
+			uint32_t generation;
+			/** Class before a Class C window, for CLASS_CAPTURED. */
+			enum rzi_lorawan_class original_class;
+			/** Multicast group accepted for CLASS_CAPTURED. */
+			uint8_t multicast_group;
+			/** CONTROL_DONE bits: bit0 StatusAns, bit1 DeleteAns. */
+			uint8_t control;
+			/** Accepted setup identity, for SETUP_ACCEPTED. */
+			uint32_t descriptor;
+			uint16_t frag_nb;
+			uint8_t frag_size;
+			uint8_t padding;
+			uint8_t frag_index;
+			uint8_t mc_group_bit_mask;
+			uint8_t frag_algo;
+			uint8_t block_ack_delay;
 		} fuota;
 		/** Link-check result for RZI_LORAWAN_BACKEND_LINK_CHECK. */
 		struct rzi_lorawan_link_check_result link_check;

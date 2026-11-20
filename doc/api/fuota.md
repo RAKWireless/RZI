@@ -32,8 +32,8 @@ rzi_lorawan_init() -> automatic rzi_fuota_init()
      erases fuota_delta; any other value is rejected
   -> Class C multicast writes reconstructed bytes into the selected partition
   -> the application skips uplinks while rzi_fuota_uplink_allowed() is false
-  -> multicast window ends, the service returns the device to Class A
-  -> slot1: MCUboot test upgrade, reboot
+  -> multicast window ends, the service restores the original Class A or C
+  -> slot1: wait for local StatusAns or 30 seconds, then MCUboot test upgrade and reboot
   -> fuota_delta: file stays in the 32 KiB partition, device stays up
 ```
 
@@ -91,8 +91,10 @@ server sends FPort 203.
 
 USP writes the reassembled bytes into the partition selected by the
 fragmentation descriptor. Descriptor 0 uses the MCUboot secondary slot
-(`slot1` / `image-1`) and, after the multicast window, requests a test
-upgrade and reboots. Descriptor `0x304B4152` is the little-endian value of
+(`slot1` / `image-1`). After the multicast window the service restores the
+class captured when that window was accepted, then requests a test upgrade
+and reboots once StatusAns has been transmitted locally or 30 seconds have
+elapsed. Descriptor `0x304B4152` is the little-endian value of
 the bytes `52 41 4B 30` (ASCII `RAK0`); it uses `fuota_delta` (32 KiB at
 `0x36000` on RAK3372-F). That file is left in place and the device does not
 reboot. Any other descriptor is rejected and nothing is erased. A file
@@ -107,8 +109,9 @@ fragments), DR3 (112) and DR4 (219). The 200-fragment redundancy cap is
 about 20% of a DR4 session, 10% of DR3 and 4.5% of DR2; a 20% cap at DR2
 does not fit in 64 KB RAM. A slot1 upload must be a signed MCUboot image.
 After that multicast window the service requests a test upgrade and reboots
-without checking the image; the application does not call
-`rzi_fuota_apply()`. A `RAK0` upload can be any file that fits in 32 KiB.
+without checking the image, once StatusAns has been sent or 30 seconds have
+elapsed. The application does not call `rzi_fuota_apply()`. A `RAK0` upload
+can be any file that fits in 32 KiB and does not reboot.
 
 Without `CONFIG_IMG_MANAGER`, installation returns `-RZI_ERR_NOT_SUPPORTED`.
 `rzi_fuota_read_image()` can still read the stored bytes from the partition

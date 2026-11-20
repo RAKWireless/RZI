@@ -20,6 +20,8 @@ struct rzi_lorawan_fuota_ops {
 	int (*read_image)(uint32_t offset, uint8_t *buffer, size_t size);
 	/** Request a cold reboot. Does not return on success. */
 	int (*reboot)(void);
+	/** Stop one TS005 Class C group. -RZI_ERR_BUSY if it is still active. */
+	int (*stop_multicast)(uint8_t group_id);
 };
 
 #endif /* RZI_LORAWAN_FUOTA_OPS_H */

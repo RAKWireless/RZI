@@ -1,7 +1,7 @@
 diff --git a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h b/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
 --- a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
 +++ b/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h
-@@ -2275,6 +2275,30 @@ smtc_modem_return_code_t smtc_modem_debug_connect_with_abp( uint8_t stack_id, uint32_t dev_addr,
+@@ -2276,6 +2276,61 @@
                                                              uint8_t nwk_skey[SMTC_MODEM_KEY_LENGTH],
                                                              uint8_t app_skey[SMTC_MODEM_KEY_LENGTH] );
  
@@ -19,6 +19,22 @@ diff --git a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h b/protocols/lbm_l
 +    uint8_t ( *session_setup )( uint32_t descriptor, uint16_t frag_nb, uint8_t frag_size, uint8_t padding );
 +    int ( *store )( uint32_t offset, const uint8_t* data, uint32_t size );
 +    int ( *restore )( uint32_t offset, uint8_t* data, uint32_t size );
++    /** Called after FragSessionDelete clears the session and before the next command. */
++    void ( *session_delete )( uint32_t generation );
++};
++
++/** Identity of one accepted FragSessionSetup. The descriptor is little-endian. */
++struct smtc_modem_fuota_setup
++{
++    uint32_t generation;
++    uint32_t descriptor;
++    uint16_t frag_nb;
++    uint8_t  frag_size;
++    uint8_t  padding;
++    uint8_t  frag_index;
++    uint8_t  mc_group_bit_mask;
++    uint8_t  frag_algo;
++    uint8_t  block_ack_delay;
 +};
 +
 +/**
@@ -29,14 +45,36 @@ diff --git a/protocols/lbm_lib/smtc_modem_api/smtc_modem_api.h b/protocols/lbm_l
 + */
 +void smtc_modem_fuota_set_hooks( const struct smtc_modem_fuota_hooks* hooks );
 +
++/** Generation assigned by the active session_setup hook. Read before FragDecoderInit. */
++uint32_t smtc_modem_fuota_generation( void );
++/** Publish one accepted setup. Modem thread; do not call another modem API. */
++void smtc_modem_fuota_notify_setup( const struct smtc_modem_fuota_setup* setup );
++/** Class in force when a Class C window is accepted. lorawan_class is smtc_modem_class_t. */
++void smtc_modem_fuota_notify_class( uint8_t lorawan_class, uint8_t group_id );
++/** A fragmentation answer finished local transmission. control bit0 Status, bit1 Delete. */
++void smtc_modem_fuota_notify_control( uint32_t generation, uint8_t control );
++/** False while the product service is receiving or applying. Lock-free. */
++bool smtc_modem_fuota_business_allowed( void );
++/** True while a fragmentation answer is queued or transmitting. Lock-free. */
++bool lorawan_fragmentation_answer_pending( uint8_t stack_id );
++/** True while a remote-multicast answer is queued or transmitting. Lock-free. */
++bool lorawan_multicast_answer_pending( uint8_t stack_id );
++
  #ifdef __cplusplus
  }
  #endif
 diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
-index 9391d6c..e0d2f0c 100644
 --- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
 +++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/fragmented_data_block_transport/v1.0.0/lorawan_fragmentation_package_v1.0.0.c
-@@ -52,6 +52,14 @@
+@@ -41,6 +41,7 @@
+ 
+ #include <stdint.h>   // C99 types
+ #include <stdbool.h>  // bool type
++#include <string.h>
+ 
+ #include "modem_event_utilities.h"
+ #include "lorawan_send_management.h"
+@@ -52,6 +53,14 @@
  #include "lr1mac_defs.h"
  #include "lorawan_fragmentation_package.h"
  #include "fragmentation_helper_v1.0.0.h"
@@ -51,7 +89,114 @@ index 9391d6c..e0d2f0c 100644
  
  /*
   * -----------------------------------------------------------------------------
-@@ -608,10 +616,16 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+@@ -170,6 +179,9 @@
+     uint16_t fragmentation_ans_delay_s;
+     bool     is_pending_task;
+     bool     enabled;
++    uint8_t  control_queued;
++    uint8_t  control_inflight;
++    uint32_t control_generation;
+ } lorawan_fragmentation_package_ctx_t;
+ 
+ typedef struct frag_group_data_s
+@@ -189,6 +201,7 @@
+     } control;
+     uint8_t  padding;
+     uint32_t descriptor;
++    uint32_t generation;
+ } frag_group_data_t;
+ 
+ #define frag_decoder_status_t FragDecoderStatus_t
+@@ -202,8 +215,20 @@
+ static uint8_t                nb_transmit_ans;
+ static frag_session_data_t    frag_session_data[FRAGMENTATION_MAX_NB_SESSIONS];
+ static FragDecoderCallbacks_t frag_decoder_callback;
++static bool                   frag_store_failed;
+ static int8_t                 frag_decoder_write( uint32_t addr, uint8_t* data, uint32_t size );
+ static int8_t                 frag_decoder_read( uint32_t addr, uint8_t* data, uint32_t size );
++
++static bool fuota_same_setup( const frag_group_data_t* active, const frag_group_data_t* request )
++{
++    return ( active->is_active == true ) &&
++           ( active->frag_session.frag_index == request->frag_session.frag_index ) &&
++           ( active->frag_session.mc_group_bit_mask == request->frag_session.mc_group_bit_mask ) &&
++           ( active->frag_nb == request->frag_nb ) && ( active->frag_size == request->frag_size ) &&
++           ( active->control.frag_algo == request->control.frag_algo ) &&
++           ( active->control.block_ack_delay == request->control.block_ack_delay ) &&
++           ( active->padding == request->padding ) && ( active->descriptor == request->descriptor );
++}
+ /* -----------------------------------------------------------------------------
+  * --- PRIVATE VARIABLES -------------------------------------------------------
+  */
+@@ -284,23 +309,33 @@
+ 
+ void lorawan_fragmentation_package_service_on_launch( void* service_id )
+ {
+-    if( lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size > 0 )
++    lorawan_fragmentation_package_ctx_t* ctx =
++        &lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id];
++
++    ctx->control_inflight = ctx->control_queued;
++    ctx->control_queued   = 0;
++    if( ctx->fragmentation_tx_payload_ans_size > 0 )
+     {
+         tx_protocol_manager_request(
+-            TX_PROTOCOL_TRANSMIT_LORA, FRAGMENTATION_PORT, true,
+-            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans,
+-            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_tx_payload_ans_size,
+-            UNCONF_DATA_UP,
++            TX_PROTOCOL_TRANSMIT_LORA, FRAGMENTATION_PORT, true, ctx->fragmentation_tx_payload_ans,
++            ctx->fragmentation_tx_payload_ans_size, UNCONF_DATA_UP,
+             smtc_modem_hal_get_time_in_ms( ) +
+-                smtc_modem_hal_get_random_nb_in_range(
+-                    0, lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].fragmentation_ans_delay_s * 1000 ),
+-            lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].stack_id );
++                smtc_modem_hal_get_random_nb_in_range( 0, ctx->fragmentation_ans_delay_s * 1000 ),
++            ctx->stack_id );
+     }
+ }
+ 
+ void lorawan_fragmentation_package_service_on_update( void* service_id )
+ {
+-    lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id].is_pending_task = false;
++    lorawan_fragmentation_package_ctx_t* ctx =
++        &lorawan_fragmentation_package_ctx[*( uint8_t* ) service_id];
++
++    ctx->is_pending_task = false;
++    if( ctx->control_inflight != 0U )
++    {
++        smtc_modem_fuota_notify_control( ctx->control_generation, ctx->control_inflight );
++        ctx->control_inflight = 0;
++    }
+     if( nb_transmit_ans > 1 )
+     {
+         nb_transmit_ans--;
+@@ -537,9 +572,21 @@
+                     ctx->fragmentation_tx_payload_ans[ans_index++] =
+                         frag_session_data[frag_index].frag_decoder_status.MatrixError & 0x01;
+ 
+-                    // Fetch the co-efficient value required to calculate delay of that respective session.
+-                    ctx->fragmentation_ans_delay_s =
+-                        1 << ( frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4 );
++                    /* Registered hooks answer a unicast StatusReq immediately.
++                     * Without hooks, keep the package BlockAckDelay.
++                     */
++                    if( ( fuota_hooks != NULL ) &&
++                        ( is_received_on_multicast_window( fragmentation_package_rx_window ) == false ) )
++                    {
++                        ctx->fragmentation_ans_delay_s = 0;
++                    }
++                    else
++                    {
++                        ctx->fragmentation_ans_delay_s =
++                            1 << ( frag_session_data[frag_index].frag_group_data.control.block_ack_delay + 4 );
++                    }
++                    ctx->control_queued |= 0x01;
++                    ctx->control_generation = frag_session_data[frag_index].frag_group_data.generation;
+                 }
+             }
+             break;
+@@ -608,24 +655,72 @@
                  status |= 0x04;  // frag_session index not supported
              }
  
@@ -59,26 +204,118 @@ index 9391d6c..e0d2f0c 100644
 -            // Not clear how to handle this.
 -            // Currently the descriptor is always correct
 -            if( frag_session_data_tmp.frag_group_data.descriptor != 0x01020304 )
-+            // Descriptor is not really defined in the specification.
-+            // A registered hook decides whether this session can be stored.
-+            if( ( fuota_hooks != NULL ) && ( fuota_hooks->session_setup != NULL ) )
++            /* Replay and conflict checks apply only after hooks are registered.
++             * Without hooks this package keeps the behavior from the session-hooks patch.
++             */
++            bool hooks_ready     = ( fuota_hooks != NULL ) && ( fuota_hooks->session_setup != NULL );
++            bool setup_replay    = false;
++            bool setup_conflicts = false;
++            if( ( status & 0x3F ) == 0 && hooks_ready == true )
++            {
++                for( uint8_t session = 0; session < FRAGMENTATION_MAX_NB_SESSIONS; session++ )
++                {
++                    if( fuota_same_setup( &frag_session_data[session].frag_group_data,
++                                          &frag_session_data_tmp.frag_group_data ) == true )
++                    {
++                        setup_replay = true;
++                    }
++                    else if( frag_session_data[session].frag_group_data.is_active == true )
++                    {
++                        setup_conflicts = true;
++                    }
++                }
++            }
++            if( ( status & 0x3F ) == 0 && hooks_ready == true && setup_conflicts == true && setup_replay == false )
++            {
++                status |= 0x02;
++            }
++            else if( ( status & 0x3F ) == 0 && hooks_ready == true && setup_replay == false )
 +            {
 +                status |= fuota_hooks->session_setup( frag_session_data_tmp.frag_group_data.descriptor,
 +                                                      frag_session_data_tmp.frag_group_data.frag_nb,
 +                                                      frag_session_data_tmp.frag_group_data.frag_size,
 +                                                      frag_session_data_tmp.frag_group_data.padding );
 +            }
-+            else if( frag_session_data_tmp.frag_group_data.descriptor != 0x01020304 )
++            else if( hooks_ready == false && frag_session_data_tmp.frag_group_data.descriptor != 0x01020304 )
              {
                  // status |= 0x08; // Wrong Descriptor
              }
-@@ -796,12 +810,20 @@ static frag_status_t fragmentation_package_parser( lorawan_fragmentation_package
+ 
+-            if( ( status & 0x3F ) == 0 )
++            if( ( status & 0x3F ) == 0 && setup_replay == false )
+             {
++                frag_session_data_tmp.frag_group_data.generation =
++                    ( hooks_ready == true ) ? smtc_modem_fuota_generation( ) : 0;
+                 frag_session_data_tmp.frag_group_data.is_active   = true;
+                 frag_session_data_tmp.frag_decoder_process_status = FRAG_SESSION_NOT_STARTED;
+ 
+                 memcpy( &frag_session_data[frag_session_data_tmp.frag_group_data.frag_session.frag_index],
+                         &frag_session_data_tmp, sizeof( frag_session_data_t ) );
++                frag_store_failed = false;
+ 
+                 FragDecoderInit( frag_session_data_tmp.frag_group_data.frag_nb,
+                                  frag_session_data_tmp.frag_group_data.frag_size, &frag_decoder_callback );
++
++                if( hooks_ready == true )
++                {
++                    struct smtc_modem_fuota_setup setup;
++
++                    setup.generation        = frag_session_data_tmp.frag_group_data.generation;
++                    setup.descriptor        = frag_session_data_tmp.frag_group_data.descriptor;
++                    setup.frag_nb           = frag_session_data_tmp.frag_group_data.frag_nb;
++                    setup.frag_size         = frag_session_data_tmp.frag_group_data.frag_size;
++                    setup.padding           = frag_session_data_tmp.frag_group_data.padding;
++                    setup.frag_index        = frag_session_data_tmp.frag_group_data.frag_session.frag_index;
++                    setup.mc_group_bit_mask = frag_session_data_tmp.frag_group_data.frag_session.mc_group_bit_mask;
++                    setup.frag_algo         = frag_session_data_tmp.frag_group_data.control.frag_algo;
++                    setup.block_ack_delay   = frag_session_data_tmp.frag_group_data.control.block_ack_delay;
++                    smtc_modem_fuota_notify_setup( &setup );
++                }
+             }
+             if( ( ans_index + FRAGMENTATION_SESSION_SETUP_ANS_SIZE ) <= max_payload_size )
+             {
+@@ -655,8 +750,15 @@
+             }
+             else
+             {
+-                // Delete session
++                uint32_t generation = frag_session_data[id].frag_group_data.generation;
++
+                 frag_session_data[id].frag_group_data.is_active = false;
++                if( ( fuota_hooks != NULL ) && ( fuota_hooks->session_delete != NULL ) )
++                {
++                    fuota_hooks->session_delete( generation );
++                }
++                ctx->control_queued |= 0x02;
++                ctx->control_generation = generation;
+             }
+             if( ( ans_index + FRAGMENTATION_SESSION_DELETE_ANS_SIZE ) <= max_payload_size )
+             {
+@@ -749,6 +851,12 @@
+                                                 fragmentation_package_rx_buffer_length );
+                     frag_session_data[frag_index].frag_decoder_process_status = FragDecoderProcess(
+                         frag_counter, &fragmentation_package_rx_buffer[fragmentation_package_rx_buffer_index + 3] );
++                    if( ( frag_store_failed == true ) &&
++                        ( frag_session_data[frag_index].frag_decoder_process_status ==
++                          FRAG_SESSION_FINISHED_SUCCESSFULLY ) )
++                    {
++                        frag_session_data[frag_index].frag_decoder_process_status = FRAG_SESSION_FAILED;
++                    }
+                     frag_session_data[frag_index].frag_decoder_status = FragDecoderGetStatus( );
+                     SMTC_MODEM_HAL_TRACE_PRINTF( "Fuota session info:\n" );
+                     SMTC_MODEM_HAL_TRACE_PRINTF( "Current fragment index = %d\n", frag_index );
+@@ -796,14 +904,56 @@
  
  static int8_t frag_decoder_write( uint32_t addr, uint8_t* data, uint32_t size )
  {
 +    if( ( fuota_hooks != NULL ) && ( fuota_hooks->store != NULL ) )
 +    {
-+        return ( fuota_hooks->store( addr, data, size ) == 0 ) ? 0 : -1;
++        if( fuota_hooks->store( addr, data, size ) != 0 )
++        {
++            frag_store_failed = true;
++            return -1;
++        }
++        return 0;
 +    }
      smtc_modem_hal_context_store( CONTEXT_FUOTA, addr, data, size );
      return 0;
@@ -93,3 +330,129 @@ index 9391d6c..e0d2f0c 100644
      smtc_modem_hal_context_restore( CONTEXT_FUOTA, addr, data, size );
      return 0;
  }
+ 
++bool lorawan_fragmentation_answer_pending( uint8_t stack_id )
++{
++    uint8_t                              service_id = 0;
++    lorawan_fragmentation_package_ctx_t* ctx =
++        lorawan_fragmentation_package_get_ctx_from_stack_id( stack_id, &service_id );
++
++    if( ctx == NULL )
++    {
++        return false;
++    }
++    return ( ctx->is_pending_task == true ) || ( ctx->control_queued != 0U ) || ( ctx->control_inflight != 0U );
++}
++
++__attribute__( ( weak ) ) uint32_t smtc_modem_fuota_generation( void )
++{
++    return 0;
++}
++
++__attribute__( ( weak ) ) void smtc_modem_fuota_notify_setup( const struct smtc_modem_fuota_setup* setup )
++{
++    ( void ) setup;
++}
++
++__attribute__( ( weak ) ) void smtc_modem_fuota_notify_control( uint32_t generation, uint8_t control )
++{
++    ( void ) generation;
++    ( void ) control;
++}
++
+ /* --- EOF ------------------------------------------------------------------ */
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_packages/remote_multicast_setup/v1.0.0/lorawan_remote_multicast_setup_package_v1.0.0.c
+@@ -53,6 +53,7 @@
+ #include "lorawan_alcsync.h"
+ #include "lorawan_class_b_management.h"
+ #include "lorawan_remote_multicast_setup_package.h"
++#include "smtc_modem_api.h"
+ #include "smtc_multicast.h"
+ #include "modem_tx_protocol_manager.h"
+ #include "lorawan_cid_request_management.h"
+@@ -1053,7 +1054,16 @@
+                         ctx->remote_multicast_tx_payload_ans[ans_index++] = time_to_start & 0xFF;
+                         ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 8 ) & 0xFF;
+                         ctx->remote_multicast_tx_payload_ans[ans_index++] = ( time_to_start >> 16 ) & 0xFF;
+-                        ctx->launch_class_c[mc_grp_id]                    = true;
++                        {
++                            smtc_modem_class_t current_class = SMTC_MODEM_CLASS_A;
++
++                            if( smtc_modem_get_class( stack_id, &current_class ) != SMTC_MODEM_RC_OK )
++                            {
++                                current_class = SMTC_MODEM_CLASS_A;
++                            }
++                            smtc_modem_fuota_notify_class( ( uint8_t ) current_class, mc_grp_id );
++                        }
++                        ctx->launch_class_c[mc_grp_id] = true;
+                     }
+                 }
+             }
+@@ -1174,4 +1184,24 @@
+     return REMOTE_MULTICAST_SETUP_STATUS_OK;
+ }
+ 
++bool lorawan_multicast_answer_pending( uint8_t stack_id )
++{
++    uint8_t                                      service_id = 0;
++    lorawan_remote_multicast_setup_package_ctx_t* ctx =
++        lorawan_remote_multicast_setup_package_get_ctx_from_stack_id( stack_id, &service_id );
++
++    if( ctx == NULL )
++    {
++        return false;
++    }
++    return ( ctx->remote_multicast_tx_payload_ans_size > 0U ) ||
++           ( ( ( ctx->task_ctx_mask >> ANS_CMD_TASK ) & 0x01U ) == 0x01U );
++}
++
++__attribute__( ( weak ) ) void smtc_modem_fuota_notify_class( uint8_t lorawan_class, uint8_t group_id )
++{
++    ( void ) lorawan_class;
++    ( void ) group_id;
++}
++
+ /* --- EOF ------------------------------------------------------------------ */
+diff --git a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+--- a/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
++++ b/protocols/lbm_lib/smtc_modem_core/lorawan_manager/lorawan_send_management.c
+@@ -189,12 +189,37 @@
+  * --- PRIVATE FUNCTIONS DEFINITION --------------------------------------------
+  */
+ 
++__attribute__( ( weak ) ) bool smtc_modem_fuota_business_allowed( void )
++{
++    return true;
++}
++
++__attribute__( ( weak ) ) bool lorawan_fragmentation_answer_pending( uint8_t stack_id )
++{
++    ( void ) stack_id;
++    return false;
++}
++
++__attribute__( ( weak ) ) bool lorawan_multicast_answer_pending( uint8_t stack_id )
++{
++    ( void ) stack_id;
++    return false;
++}
++
+ static void lorawan_send_management_service_on_launch( void* context )
+ {
+     status_lorawan_t send_status                                          = ERRORLORAWAN;
+     stask_manager*   task_manager                                         = ( stask_manager* ) context;
+     lorawan_send_management_obj[STACK_ID_CURRENT_TASK].rx_ack_bit_context = 0;
+ 
++    if( ( smtc_modem_fuota_business_allowed( ) == false ) ||
++        ( lorawan_fragmentation_answer_pending( STACK_ID_CURRENT_TASK ) == true ) ||
++        ( lorawan_multicast_answer_pending( STACK_ID_CURRENT_TASK ) == true ) )
++    {
++        task_manager->modem_task[VIRTUAL_TASK_ID].task_context = false;
++        return;
++    }
++
+     send_status = tx_protocol_manager_request(
+         TX_PROTOCOL_TRANSMIT_LORA, lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport,
+         lorawan_send_management_obj[STACK_ID_CURRENT_TASK].fport_present,

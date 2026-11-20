@@ -5,12 +5,16 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
-#include <zephyr/sys/atomic.h>
+#include <zephyr/sys/util.h>
 #if defined(CONFIG_HWINFO)
 #include <zephyr/drivers/hwinfo.h>
 #endif
 #include <rzi/lorawan/fuota.h>
 #include <rzi/lorawan/lorawan.h>
+
+#ifdef CONFIG_IMG_MANAGER
+#include <zephyr/dfu/mcuboot.h>
+#endif
 
 #include <uplink_log.h>
 
@@ -31,7 +35,7 @@ LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 
 /* Firmware version reported in the boot report (major.minor.patch.build). */
 #define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 1
+#define FW_VERSION_MINOR 2
 #define FW_VERSION_PATCH 0
 #define FW_VERSION_BUILD 0
 
@@ -43,16 +47,19 @@ LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 #define DEVICE_CODE UPLINK_LOG_MODULE_UNKNOWN
 #endif
 
-/* FUOTA session milestones handed from the dispatcher thread to main. */
-#define FUOTA_SESSION_STARTED BIT(0)
-#define FUOTA_SESSION_ENDED   BIT(1)
-#define FUOTA_FRAG_INCOMPLETE BIT(2)
+struct fuota_log_item {
+	uint8_t code;
+	bool pause_drain;
+	bool resume_drain;
+	bool has_event;
+};
 
 static K_SEM_DEFINE(stack_ready, 0, 1);
 static K_SEM_DEFINE(join_done, 0, 1);
+K_MSGQ_DEFINE(fuota_log_q, sizeof(struct fuota_log_item), 4, 4);
 static volatile bool joined;
-static atomic_t fuota_milestones;
 static enum rzi_fuota_state fuota_state;
+static uint32_t fuota_result_generation;
 
 static const char *tx_status_str(enum rzi_lorawan_tx_status status)
 {
@@ -134,40 +141,74 @@ static void on_event(const struct rzi_lorawan_event *event, void *user_data)
 	}
 }
 
-static void post_fuota_milestone(atomic_val_t milestone)
+static void queue_fuota_log(const struct fuota_log_item *item)
 {
-	atomic_or(&fuota_milestones, milestone);
+	if (k_msgq_put(&fuota_log_q, item, K_NO_WAIT) != 0) {
+		LOG_WRN("FUOTA log queue full");
+	}
 	uplink_log_rzi_wakeup();
+}
+
+static void queue_fuota_result(const struct rzi_fuota_round *round, bool have_round)
+{
+	struct fuota_log_item item = {
+		.resume_drain = true,
+		.has_event = true,
+	};
+
+	if (have_round && round->generation != 0U && round->generation == fuota_result_generation) {
+		item.has_event = false;
+		queue_fuota_log(&item);
+		return;
+	}
+	if (have_round && round->generation != 0U) {
+		fuota_result_generation = round->generation;
+	}
+	item.code = have_round && round->write_failed ? UPLINK_LOG_EVENT_FUOTA_FLASH_FAIL
+						       : UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE;
+	queue_fuota_log(&item);
 }
 
 static void on_fuota_state(enum rzi_fuota_state state, void *user_data)
 {
 	ARG_UNUSED(user_data);
 	LOG_INF("FUOTA %s", fuota_state_str(state));
-	/* The session ended before the image was reconstructed. */
+	/* The session ended before reconstruction reported a result. */
 	if (fuota_state == RZI_FUOTA_STATE_TRANSFERRING && state == RZI_FUOTA_STATE_READY) {
-		post_fuota_milestone(FUOTA_FRAG_INCOMPLETE | FUOTA_SESSION_ENDED);
+		struct rzi_fuota_round round;
+		bool have_round = rzi_fuota_get_round(&round) == 0;
+
+		queue_fuota_result(have_round ? &round : NULL, have_round);
 	}
 	fuota_state = state;
 }
 
 static void on_fuota_session_started(void *user_data)
 {
+	const struct fuota_log_item item = {
+		.code = UPLINK_LOG_EVENT_FUOTA_STARTED,
+		.pause_drain = true,
+		.has_event = true,
+	};
+
 	ARG_UNUSED(user_data);
 	LOG_INF("FUOTA transfer started");
-	post_fuota_milestone(FUOTA_SESSION_STARTED);
+	queue_fuota_log(&item);
 }
 
 static void on_fuota_complete(int status, void *user_data)
 {
+	struct rzi_fuota_round round;
+	bool have_round = rzi_fuota_get_round(&round) == 0;
+
 	ARG_UNUSED(user_data);
 	if (status != 0) {
 		LOG_ERR("FUOTA failed: %s", rzi_err_str(status));
-		post_fuota_milestone(FUOTA_FRAG_INCOMPLETE | FUOTA_SESSION_ENDED);
+		queue_fuota_result(have_round ? &round : NULL, have_round);
 		return;
 	}
 	LOG_INF("FUOTA finished");
-	post_fuota_milestone(FUOTA_SESSION_ENDED);
+	queue_fuota_log(&(struct fuota_log_item){.resume_drain = true});
 }
 
 static const struct rzi_lorawan_callbacks callbacks = {
@@ -180,36 +221,32 @@ static const struct rzi_fuota_callbacks fuota_callbacks = {
 	.complete = on_fuota_complete,
 };
 
-static void submit_fuota_event(uint8_t code)
+static void submit_fuota_item(const struct fuota_log_item *item)
 {
-	struct uplink_log_event event = {
-		.domain = UPLINK_LOG_EVENT_DOMAIN_FUOTA,
-		.code = code,
-	};
-	int rc = uplink_log_submit_event(&event);
+	if (item->has_event) {
+		const struct uplink_log_event event = {
+			.domain = UPLINK_LOG_EVENT_DOMAIN_FUOTA,
+			.code = item->code,
+		};
 
-	if (rc != UPLINK_LOG_OK) {
-		LOG_WRN("FUOTA log event 0x%02x not queued: %d", code, rc);
+		if (uplink_log_submit_event(&event) != UPLINK_LOG_OK) {
+			LOG_WRN("FUOTA log event 0x%02x not queued", item->code);
+		}
+	}
+	if (item->pause_drain) {
+		ignore_result(uplink_log_pause_drain());
+	}
+	if (item->resume_drain) {
+		ignore_result(uplink_log_resume_drain());
 	}
 }
 
-/*
- * The FUOTA service does not expose fragment counts or the target version
- * yet, so Event Data stays zero.
- */
-static void handle_fuota_milestones(void)
+static void handle_fuota_log(void)
 {
-	atomic_val_t milestones = atomic_clear(&fuota_milestones);
+	struct fuota_log_item item;
 
-	if ((milestones & FUOTA_SESSION_STARTED) != 0) {
-		submit_fuota_event(UPLINK_LOG_EVENT_FUOTA_STARTED);
-		ignore_result(uplink_log_pause_drain());
-	}
-	if ((milestones & FUOTA_FRAG_INCOMPLETE) != 0) {
-		submit_fuota_event(UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE);
-	}
-	if ((milestones & FUOTA_SESSION_ENDED) != 0) {
-		ignore_result(uplink_log_resume_drain());
+	while (k_msgq_get(&fuota_log_q, &item, K_NO_WAIT) == 0) {
+		submit_fuota_item(&item);
 	}
 }
 
@@ -259,6 +296,23 @@ static void submit_boot_report(enum uplink_log_reset_reason reset_reason, uint32
 	if (rc != UPLINK_LOG_OK) {
 		LOG_WRN("Boot report not queued: %d", rc);
 	}
+}
+
+static void confirm_running_image(void)
+{
+#ifdef CONFIG_IMG_MANAGER
+	int rc;
+
+	if (boot_is_img_confirmed()) {
+		return;
+	}
+	rc = boot_write_img_confirmed();
+	if (rc != 0) {
+		LOG_ERR("Image confirm failed: %d", rc);
+		return;
+	}
+	LOG_INF("Running image confirmed");
+#endif
 }
 
 static int request_join(void)
@@ -353,6 +407,7 @@ int main(void)
 		k_sleep(RETRY_DELAY);
 	}
 	LOG_INF("Joined");
+	confirm_running_image();
 	submit_boot_report(reset_reason, join_failures);
 
 	next_uplink = k_uptime_get();
@@ -369,7 +424,7 @@ int main(void)
 			}
 			next_uplink = now + UPLINK_INTERVAL_MS;
 		}
-		handle_fuota_milestones();
+		handle_fuota_log();
 		uplink_log_rzi_poll((uint32_t)MAX(next_uplink - k_uptime_get(), 0));
 	}
 }
