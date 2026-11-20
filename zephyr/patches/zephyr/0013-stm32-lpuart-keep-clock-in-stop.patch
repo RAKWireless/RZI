@@ -1,0 +1,41 @@
+diff --git a/drivers/serial/uart_stm32.c b/drivers/serial/uart_stm32.c
+index a4311ac831b..1e6c56fe645 100644
+--- a/drivers/serial/uart_stm32.c
++++ b/drivers/serial/uart_stm32.c
+@@ -2612,9 +2612,36 @@ static int uart_stm32_pm_action(const struct device *dev, enum pm_device_action
+ 				return err;
+ 			}
+ 		}
++#if defined(CONFIG_PM) && defined(IS_UART_WAKEUP_FROMSTOP_INSTANCE)
++		else if (config->wakeup_source) {
++			/* With the kernel clock stopped, TXE and TEACK stay clear
++			 * and poll_out() never returns. Clear the latched line
++			 * errors, then wait until TX and RX acknowledge.
++			 */
++			LL_USART_ClearFlag_ORE(config->usart);
++			LL_USART_ClearFlag_FE(config->usart);
++			LL_USART_ClearFlag_NE(config->usart);
++#ifdef USART_ISR_REACK
++			while (LL_USART_IsActiveFlag_REACK(config->usart) == 0) {
++			}
++#endif
++#ifdef USART_ISR_TEACK
++			while (LL_USART_IsActiveFlag_TEACK(config->usart) == 0) {
++			}
++#endif
++		}
++#endif
+ 		break;
+ 	case PM_DEVICE_ACTION_SUSPEND:
+ 		uart_stm32_suspend_setup(dev);
++#if defined(CONFIG_PM) && defined(IS_UART_WAKEUP_FROMSTOP_INSTANCE)
++		if (config->wakeup_source) {
++			/* Keep the kernel clock. Gating it drops the waking
++			 * character and leaves TXE and TEACK clear.
++			 */
++			break;
++		}
++#endif
+ 		/* Stop device clock. Note: fixed clocks are not handled yet. */
+ 		err = clock_control_off(config->clock, (clock_control_subsys_t)&config->pclken[0]);
+ 		if (err < 0) {

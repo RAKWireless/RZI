@@ -54,20 +54,29 @@ void stm32wl_lpuart_wakeup_drain(void)
 	uint32_t quiet = 0U;
 	uint32_t total = 0U;
 
-	if (active_uart != DEVICE_DT_GET(DT_NODELABEL(lpuart1)) ||
-	    !LL_APB1_GRP2_IsEnabledClock(LL_APB1_GRP2_PERIPH_LPUART1)) {
+	if (active_uart != DEVICE_DT_GET(DT_NODELABEL(lpuart1))) {
+		return;
+	}
+	/* PM may have gated the bus clock. The FIFO is readable only after it is on. */
+	if (!LL_APB1_GRP2_IsEnabledClock(LL_APB1_GRP2_PERIPH_LPUART1)) {
+		LL_APB1_GRP2_EnableClock(LL_APB1_GRP2_PERIPH_LPUART1);
+	}
+	if (!LL_USART_IsEnabled(LPUART1)) {
 		return;
 	}
 	if (!LL_USART_IsActiveFlag_WKUP(LPUART1) && !LL_USART_IsActiveFlag_RXNE(LPUART1)) {
+		LL_USART_ClearFlag_ORE(LPUART1);
+		LL_USART_ClearFlag_FE(LPUART1);
+		LL_USART_ClearFlag_NE(LPUART1);
 		return;
 	}
 	for (;;) {
 		if (LL_USART_IsActiveFlag_RXNE(LPUART1)) {
 			uint8_t byte = (uint8_t)LL_USART_ReceiveData8(LPUART1);
 
-			if (LL_USART_IsActiveFlag_ORE(LPUART1)) {
-				LL_USART_ClearFlag_ORE(LPUART1);
-			}
+			LL_USART_ClearFlag_ORE(LPUART1);
+			LL_USART_ClearFlag_FE(LPUART1);
+			LL_USART_ClearFlag_NE(LPUART1);
 			ignore_result(rzi_at_receive(&byte, 1U));
 			quiet = 0U;
 			continue;
@@ -79,6 +88,10 @@ void stm32wl_lpuart_wakeup_drain(void)
 		quiet++;
 		total++;
 	}
+	/* WKUP with no byte still leaves ORE/FE/NE set. Clear them before leaving. */
+	LL_USART_ClearFlag_ORE(LPUART1);
+	LL_USART_ClearFlag_FE(LPUART1);
+	LL_USART_ClearFlag_NE(LPUART1);
 	LL_USART_ClearFlag_WKUP(LPUART1);
 }
 #endif

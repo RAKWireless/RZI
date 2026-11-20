@@ -225,3 +225,18 @@ patches:
       Drain the STM32WL LPUART FIFO after STOP and before the PM core
       restores clocks. Apply after zephyr/0009, which leaves wake IRQs
       masked across that window. The AT UART adapter supplies the drain.
+
+  - path: zephyr/0013-stm32-lpuart-keep-clock-in-stop.patch
+    sha256sum: fe1c6d89b84b73d354eef2348c2ade54a8a337443e66263e3c3091056022fb78
+    module: zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-18
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Keep a wakeup-source UART kernel clock enabled across STOP when
+      CONFIG_PM is on. Gating that clock drops the waking character and
+      leaves TXE and TEACK clear, so AT poll writes never return. On
+      resume, clear the latched line errors and wait for TX and RX
+      acknowledge. wakeup_source exists only with CONFIG_PM.
