@@ -39,6 +39,9 @@ static __maybe_unused void ignore_result(int result)
 #if defined(CONFIG_RZI_LORAWAN_BACKEND_USP)
 #include <smtc_modem_api.h>
 
+static atomic_t business_blocked;
+static atomic_t published_generation;
+
 __weak void smtc_modem_fuota_set_hooks(const struct smtc_modem_fuota_hooks *hooks)
 {
 	ARG_UNUSED(hooks);
@@ -78,8 +81,9 @@ LOG_MODULE_REGISTER(rzi_fuota, LOG_LEVEL_INF);
 
 static K_MUTEX_DEFINE(lock);
 static atomic_t active;
+#if !defined(CONFIG_RZI_LORAWAN_BACKEND_USP)
 static atomic_t business_blocked;
-static atomic_t published_generation;
+#endif
 static enum rzi_fuota_state state = RZI_FUOTA_STATE_IDLE;
 static bool image_ready;
 #if defined(CONFIG_RZI_POWER)
