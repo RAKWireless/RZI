@@ -63,7 +63,7 @@ patches:
       files get LicenseRef identifiers for the texts kept in LICENSES.txt.
 
   - path: usp/0005-fuota-session-hooks.patch
-    sha256sum: 9f5d8722624d9a7f3a317b49e574a236bd99bcd75d57f7a4bfe83bfd5f0c706b
+    sha256sum: 17580fd4ebe68b43ec87b27f2cfc546c96a3a81e3faf41e8f2a8d29c0f2adf57
     module: usp
     author: rzi
     email: patches@rzi.local

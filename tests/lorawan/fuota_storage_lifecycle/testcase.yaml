@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+tests:
+  rzi.lorawan.fuota_storage_lifecycle:
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    timeout: 180
+    tags: [fuota, flash]

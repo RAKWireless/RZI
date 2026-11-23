@@ -1,0 +1,15 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Synthetic native Flash regions; no board partition settings are changed. */
+&slot1_partition {
+    reg = <0x75000 0x34000>;
+};
+
+&flash0 {
+    partitions {
+        fuota_delta_partition: partition@100000 {
+            compatible = "zephyr,mapped-partition";
+            label = "fuota_delta";
+            reg = <0x100000 0x8000>;
+        };
+    };
+};

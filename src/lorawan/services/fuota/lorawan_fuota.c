@@ -595,10 +595,11 @@ static void finish_window(void)
 		LOG_INF("FUOTA delta stored, upgrade not requested");
 		return;
 	}
-	set_state_locked(RZI_FUOTA_STATE_COMPLETE);
 	round.finish_wait = true;
 	round.finish_deadline_ms = k_uptime_get() + (int64_t)FUOTA_FINISH_WAIT_S * 1000;
 	round.hold_class_c_keepalive = class_c;
+	/* COMPLETE callbacks run unlocked and may race with the next Setup. */
+	set_state_locked(RZI_FUOTA_STATE_COMPLETE);
 	if (!class_c) {
 		schedule_keepalive();
 	}
@@ -859,9 +860,6 @@ static void handle_fuota_event(const struct rzi_lorawan_backend_event *event)
 #if FUOTA_DIRECT_SLOT
 		if (slot_session) {
 			reconstructed = event->fuota.successful;
-			if (!reconstructed) {
-				write_failed = true;
-			}
 			round.write_failed = write_failed;
 			round.image_committed = reconstructed && !write_failed;
 			LOG_INF("FUOTA reconstruction %s", reconstructed ? "complete" : "failed");
