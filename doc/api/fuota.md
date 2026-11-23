@@ -103,7 +103,7 @@ A whole-firmware update needs all of the following:
 2. A non-overlapping context area or adapted reconstruction backend with
    enough capacity to hold that image before installation.
 3. A secondary MCUboot slot large enough for the image and required trailer.
-4. A validated signing, boot-mode, recovery, and partition-migration process.
+4. A validated signing, boot-mode, and recovery process.
 
 `rzi_fuota_apply()` reads the already-reconstructed image through backend
 `read_image`, copies it to slot1 using `flash_img`, requests an upgrade, and
@@ -112,13 +112,13 @@ area. Without IMG_MANAGER, apply returns NOT_SUPPORTED; read_image remains
 available where the backend supports it.
 
 Standard RAK3172 is single-slot and cannot select FUOTA with MCUboot.
-RAK3372-F has a 192 KiB external secondary slot, matching its primary slot,
-but its current 4 KiB reconstruction space cannot hold a full image.
-Its overwrite-only boot mode does not provide automatic rollback.
+RAK3372-F has two 208 KiB image slots, with the secondary slot on the
+MX25L400. Its board default uses scratch swap.
 
-RAK3372-F previously used 200 KiB slots. Migrate using a matching merged
-image before testing current updates and invalidate any old external image.
-See [partition migration](../architecture/boot.md#rak3372-f-partition-migration).
+The current backend reconstruction area is 4 KiB. The 32 KiB delta
+partition is reserved, and the current apply path still reads from the
+backend reconstruction area. See the
+[RAK3372-F flash layout](../architecture/boot.md#rak3372-f-flash-layout).
 
 ## Public API
 

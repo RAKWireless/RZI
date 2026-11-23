@@ -38,17 +38,18 @@ Callers must stay in thread context.
 
 Every product board reserves separate areas for Zephyr settings and the
 LoRa Basics Modem context so direct modem flash writes never share sectors
-with NVS. On RAK3172 and RAK3172-F, settings uses `storage_partition` at
-`0x3c000` (8 KiB) and the modem uses `lora_context_partition` at `0x3e000`
-(8 KiB), relative to internal flash at `0x08000000`. RAK4631 splits its
-tail 32 KiB into `storage_partition` at `0xf8000` (24 KiB) and
-`lora_context_partition` at `0xfe000` (8 KiB); RAK3362 splits its tail
-36 KiB RRAM into `storage_partition` at `0x174000` (28 KiB) and
-`lora_context_partition` at `0x17b000` (8 KiB).
-On STM32WLE5 the 2 KiB erase page gives settings NVS four sectors; its
-default sector count is capped by the actual partition size. RAK3172-F
-external flash holds the secondary firmware image, not settings or modem
-context.
+with NVS. On RAK3172, settings uses `storage_partition` at `0x3c000`
+(8 KiB) and the modem uses `lora_context_partition` at `0x3e000` (8 KiB),
+relative to internal flash at `0x08000000`. On RAK3372-F, the same
+partitions reside on the MX25L400 at offsets `0x3e000` and `0x40000`,
+respectively, with 8 KiB each.
+
+RAK4631 splits its tail 32 KiB into `storage_partition` at `0xf8000`
+(24 KiB) and `lora_context_partition` at `0xfe000` (8 KiB). RAK3362 splits
+its tail 36 KiB RRAM into `storage_partition` at `0x174000` (28 KiB) and
+`lora_context_partition` at `0x17b000` (8 KiB). The 8 KiB settings areas
+span four 2 KiB erase pages on the STM32WLE5 internal flash and two 4 KiB
+erase sectors on the MX25L400.
 
 The AT sample enables RZI storage with settings NVS. The periodic-uplink
 sample leaves RZI storage disabled and reads credentials from devicetree;

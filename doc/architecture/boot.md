@@ -32,7 +32,7 @@ Adding a board only adds that board's DTS and flash notes.
 |---|---|---|---|
 | `rak4631/nrf52840/rzi` | RZI RAK4631 | `rak4631/nrf52840/rzi` | MCUBoot and LoRaWAN samples wired |
 | `rak3172/stm32wle5xx/rzi` | RZI RAK3372 | `rak3172/stm32wle5xx/rzi` | Single-slot MCUBoot; on-chip SUBGHZ (USP patch); no FUOTA |
-| `rak3372_f` | RAK3372-F | `rak3372_f/stm32wle5xx` | Overwrite-only MCUBoot; image-1 on the on-module MX25L400; FUOTA |
+| `rak3372_f` | RAK3372-F | `rak3372_f/stm32wle5xx` | MCUboot scratch swap; secondary slot on MX25L400 |
 | `rak3362` | RAK3362 | `rak3362/nrf54l15/cpuapp` | Overwrite-only MCUBoot; SX1262 on SPI22; console and AT on uart20 |
 
 nRF52840 (RAK4631) keeps the upstream Zephyr boot and slot
@@ -85,58 +85,33 @@ upstream nRF54L15 boards without FLPR:
 | `storage` | `0x174000` | 28 KB | Zephyr settings / NVS |
 | `lora_context` | `0x17b000` | 8 KB | LoRa Basics Modem context |
 
-RAK3372-F uses a larger boot partition than RAK3372, because MCUboot
-must drive the MX25L400, and adds the secondary slot on that NOR:
+### RAK3372-F flash layout
 
-| Partition | Device | Address | Size | Use |
+The STM32WLE5 internal flash holds MCUboot and the primary image. MCUboot
+uses the on-module MX25L400 SPI NOR for the secondary image and scratch.
+Offsets below are relative to the start of each flash device.
+
+| Partition | Device | Offset | Size | Use |
 |---|---|---|---|---|
-| `mcuboot` | internal | `0x00000` | 48 KB | Sole bootloader (includes the SPI NOR driver) |
-| `image-0` | internal | `0x0c000` | 192 KB | RZI application |
-| `storage` | internal | `0x3c000` | 8 KB | Zephyr settings / NVS |
-| `lora_context` | internal | `0x3e000` | 8 KB | LoRa Basics Modem context |
-| `image-1` | MX25L400 | `0x00000` | 192 KB | FUOTA / overwrite |
+| `mcuboot` | Internal flash | `0x00000` | 48 KiB | Bootloader with SPI NOR support |
+| `image-0` | Internal flash | `0x0c000` | 208 KiB | Primary image |
+| `image-1` | MX25L400 | `0x00000` | 208 KiB | Secondary image |
+| `image-scratch` | MX25L400 | `0x34000` | 8 KiB | Swap scratch, two 4 KiB erase sectors |
+| `fuota_delta` | MX25L400 | `0x36000` | 32 KiB | Reserved for delta reassembly |
+| `storage` | MX25L400 | `0x3e000` | 8 KiB | Zephyr settings / NVS |
+| `lora_context` | MX25L400 | `0x40000` | 8 KiB | LoRa Basics Modem context |
 
-### RAK3372-F partition migration
+For development, build with sysbuild and flash
+`merged_rak3372_f_stm32wle5xx.hex` so the bootloader and application use
+the same partition layout.
 
-The RAK3372-F layout was changed from 200 KB image slots with one shared
-8 KB storage area to 192 KB image slots with separate settings and LoRa
-Basics Modem context areas:
+The RAK3372-F board defaults to `MCUBOOT_MODE_SWAP_SCRATCH`. RAK4631 and
+RAK3362 default to overwrite-only, and RAK3372 defaults to
+`MCUBOOT_MODE_SINGLE_APP`.
 
-| Layout | `image-0` | `storage` | `lora_context` | `image-1` |
-|---|---|---|---|---|
-| Legacy | 200 KB at `0x0c000` | 8 KB at `0x3e000` | shared with `storage` | 200 KB |
-| Current | 192 KB at `0x0c000` | 8 KB at `0x3c000` | 8 KB at `0x3e000` | 192 KB |
-
-The MCUboot image, application image and external slot geometry must use the
-same layout. Do not install a current application over a legacy MCUboot with
-an application-only flash. The old bootloader will use the 200 KB trailer
-offset and can interpret settings or modem context data as swap metadata.
-
-For a device that has ever run the legacy layout:
-
-1. Back up credentials that cannot be regenerated. Treat NVS and modem
-   context as incompatible with the new layout.
-2. Erase the STM32 internal flash.
-3. Build with sysbuild and flash
-   `merged_rak3372_f_stm32wle5xx.hex`.
-4. Power-cycle the board so the STM32 and MX25L400 both start from a known
-   hardware state.
-5. Re-provision application settings and rejoin the LoRaWAN network.
-6. Invalidate or erase any old image in external `image-1` before the first
-   FUOTA test with the 192 KB layout.
-
-The previous AT-specific layout already used the current 192 KB geometry.
-Switching from that AT image does not require an address migration, but flash
-the merged image whenever the installed MCUboot version or layout is unknown.
-
-Downgrading to a legacy 200 KB layout is also a destructive migration:
-`storage` at `0x3c000` lies inside the legacy `image-0`. Use a full erase and
-the matching legacy merged image, and expect settings to be lost.
-
-Sysbuild mode comes from the board `Kconfig.sysbuild`: 4631, 3362, and
-3372-F are overwrite-only; 3372 is `MCUBOOT_MODE_SINGLE_APP`. The radio is the
-STM32WLE5 on-chip SUBGHZ (`st,stm32wl-subghz-radio`). The USP driver
-needs `zephyr/patches/usp_zephyr/0005-stm32wl-subghz-radio.patch`.
+On RAK3372-F, the STM32WLE5 on-chip SUBGHZ radio
+(`st,stm32wl-subghz-radio`) uses the USP driver patch
+`zephyr/patches/usp_zephyr/0005-stm32wl-subghz-radio.patch`.
 
 This is **not** compatible with RUI3 / factory Arduino boot: no `AT+BOOT`,
 `nrfutil`, or UF2. Moving to RZI is a one-time SWD boot change, the same
