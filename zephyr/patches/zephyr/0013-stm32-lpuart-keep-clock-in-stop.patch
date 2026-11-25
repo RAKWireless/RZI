@@ -1,8 +1,20 @@
 diff --git a/drivers/serial/uart_stm32.c b/drivers/serial/uart_stm32.c
-index a4311ac831b..1e6c56fe645 100644
+index a4311ac831b..d4ac88681dc 100644
 --- a/drivers/serial/uart_stm32.c
 +++ b/drivers/serial/uart_stm32.c
-@@ -2612,9 +2612,36 @@ static int uart_stm32_pm_action(const struct device *dev, enum pm_device_action
+@@ -119,6 +119,11 @@ LOG_MODULE_REGISTER(uart_stm32, CONFIG_UART_LOG_LEVEL);
+ #define HAS_RTO 0
+ #endif
+ 
++/* REACK and TEACK follow one kernel clock. Bound the wait so a stopped
++ * clock cannot hang resume.
++ */
++#define UART_STM32_ACK_TIMEOUT_US 1000U
++
+ #ifdef CONFIG_PM
+ /* Placeholder value when wakeup-line DT property is not defined */
+ #define STM32_WAKEUP_LINE_NONE	0xFFFFFFFF
+@@ -2612,9 +2617,50 @@ static int uart_stm32_pm_action(const struct device *dev, enum pm_device_action
  				return err;
  			}
  		}
@@ -12,15 +24,29 @@ index a4311ac831b..1e6c56fe645 100644
 +			 * and poll_out() never returns. Clear the latched line
 +			 * errors, then wait until TX and RX acknowledge.
 +			 */
++#if defined(USART_ISR_REACK) || defined(USART_ISR_TEACK)
++			uint32_t start;
++			const uint32_t ack_timeout_cyc =
++				k_us_to_cyc_ceil32(UART_STM32_ACK_TIMEOUT_US);
++#endif
++
 +			LL_USART_ClearFlag_ORE(config->usart);
 +			LL_USART_ClearFlag_FE(config->usart);
 +			LL_USART_ClearFlag_NE(config->usart);
 +#ifdef USART_ISR_REACK
++			start = k_cycle_get_32();
 +			while (LL_USART_IsActiveFlag_REACK(config->usart) == 0) {
++				if (k_cycle_get_32() - start > ack_timeout_cyc) {
++					return -ETIMEDOUT;
++				}
 +			}
 +#endif
 +#ifdef USART_ISR_TEACK
++			start = k_cycle_get_32();
 +			while (LL_USART_IsActiveFlag_TEACK(config->usart) == 0) {
++				if (k_cycle_get_32() - start > ack_timeout_cyc) {
++					return -ETIMEDOUT;
++				}
 +			}
 +#endif
 +		}
