@@ -209,12 +209,15 @@ __must_check int rzi_fuota_read_image(size_t offset, void *buffer, size_t size);
  * the upgrade trailer and reboots. The service calls it after the multicast
  * window, once StatusAns has been sent or 30 seconds have elapsed. A delta
  * session does not call this; calling it then returns -RZI_ERR_NOT_SUPPORTED.
- * The function does
- * not return on a successful reboot.
+ * A new request is rejected while installation is already active or while
+ * the direct-slot finish gate or a control answer is pending. Rejection does
+ * not consume or change the stored candidate; automatic installation remains
+ * enabled. The function does not return on a successful reboot.
  *
  * @retval -RZI_ERR_NOT_FOUND No reconstructed image is available.
  * @retval -RZI_ERR_NO_DATA The image size is unknown.
  * @retval -RZI_ERR_NOT_SUPPORTED No installer is compiled into this firmware.
+ * @retval -RZI_ERR_BUSY Installation is active or its finish gate has not released.
  * @retval -RZI_ERR_IO Copying the image into the secondary slot failed.
  * @retval -RZI_ERR_ISR Called from an ISR.
  *

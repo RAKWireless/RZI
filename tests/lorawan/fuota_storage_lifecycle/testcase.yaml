@@ -5,3 +5,9 @@ tests:
     integration_platforms: [native_sim]
     timeout: 180
     tags: [fuota, flash]
+  rzi.lorawan.fuota_apply_gates:
+    platform_allow: [native_sim]
+    integration_platforms: [native_sim]
+    timeout: 180
+    tags: [fuota, flash]
+    extra_args: FUOTA_TEST_INSTALLER=ON

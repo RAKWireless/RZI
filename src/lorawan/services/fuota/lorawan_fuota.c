@@ -667,6 +667,8 @@ static void finish_work_handler(struct k_work *work)
 
 static K_WORK_DELAYABLE_DEFINE(finish_work, finish_work_handler);
 
+static int apply_image(bool claimed);
+
 static void finish_try_apply(void)
 {
 	int rc;
@@ -687,7 +689,7 @@ static void finish_try_apply(void)
 	set_state_locked(RZI_FUOTA_STATE_APPLYING);
 	notify_complete(0);
 	k_mutex_unlock(&lock);
-	rc = rzi_fuota_apply();
+	rc = apply_image(true);
 	k_mutex_lock(&lock, K_FOREVER);
 	if (rc != 0) {
 		LOG_ERR("FUOTA install failed: %d", rc);
@@ -1247,7 +1249,8 @@ int rzi_fuota_read_image(size_t offset, void *buffer, size_t size)
 	return rc;
 }
 
-int rzi_fuota_apply(void)
+/* The finish path claims APPLYING before its completion callbacks. */
+static int apply_image(bool claimed)
 {
 	if (k_is_in_isr()) {
 		return -RZI_ERR_ISR;
@@ -1262,6 +1265,16 @@ int rzi_fuota_apply(void)
 		k_mutex_unlock(&lock);
 		return -RZI_ERR_NO_DATA;
 	}
+	if (!claimed && state == RZI_FUOTA_STATE_APPLYING) {
+		k_mutex_unlock(&lock);
+		return -RZI_ERR_BUSY;
+	}
+#if FUOTA_DIRECT_SLOT
+	if (!claimed && (round.finish_wait || control_tx_running())) {
+		k_mutex_unlock(&lock);
+		return -RZI_ERR_BUSY;
+	}
+#endif
 	set_state_locked(RZI_FUOTA_STATE_APPLYING);
 	k_mutex_unlock(&lock);
 
@@ -1301,6 +1314,11 @@ int rzi_fuota_apply(void)
 	}
 	return -RZI_ERR_NOT_SUPPORTED;
 #endif
+}
+
+int rzi_fuota_apply(void)
+{
+	return apply_image(false);
 }
 
 static void fuota_on_event(const struct rzi_lorawan_backend_event *event)

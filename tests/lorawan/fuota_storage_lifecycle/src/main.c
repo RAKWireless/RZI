@@ -119,8 +119,16 @@ static int fake_read_image(uint32_t offset, uint8_t *buffer, size_t size)
 	return 0;
 }
 
+#ifdef FUOTA_TEST_INSTALLER
+static atomic_t reboot_calls;
+static void reset_observations(void);
+#endif
+
 static int fake_reboot(void)
 {
+#ifdef FUOTA_TEST_INSTALLER
+	atomic_inc(&reboot_calls);
+#endif
 	return -RZI_ERR_IO;
 }
 
@@ -259,6 +267,9 @@ static void start_round(void)
 static void before(void *fixture)
 {
 	ARG_UNUSED(fixture);
+#ifdef FUOTA_TEST_INSTALLER
+	reset_observations();
+#endif
 	k_sem_reset(&fuota_sem);
 	k_sem_reset(&ready_sem);
 	erase_error = write_error = restore_error = multicast_stop_error = 0;
@@ -508,4 +519,178 @@ ZTEST(slot, test_missing_timeout_not_flash_error)
 	zassert_equal(r.storage_errno, 0);
 	zassert_equal(atomic_get(&stats.complete), -RZI_ERR_IO);
 }
+#ifdef FUOTA_TEST_INSTALLER
+/* Public apply gates with the real Service and instrumented Boot calls. */
+
+static atomic_t boot_calls;
+static int boot_result;
+static bool hold_first_boot;
+K_SEM_DEFINE(boot_entered, 0, 1);
+K_SEM_DEFINE(boot_release, 0, 1);
+
+int boot_request_upgrade(int permanent)
+{
+	unsigned call = atomic_inc(&boot_calls) + 1;
+	zassert_equal(permanent, 0, "The existing call must request TEST");
+	printk("BOOT_DOUBLE call=%u answer_pending=%d thread=%p\n", call,
+	       answer_pending, k_current_get());
+	if (hold_first_boot && call == 1) {
+		k_sem_give(&boot_entered);
+		zassert_ok(k_sem_take(&boot_release, K_SECONDS(3)));
+	}
+	return boot_result;
+}
+
+struct flash_img_context;
+int flash_img_init(struct flash_img_context *ctx)
+{
+	ARG_UNUSED(ctx);
+	zassert_unreachable("Direct-slot cases must not copy through flash_img");
+	return -ENOTSUP;
+}
+int flash_img_buffered_write(struct flash_img_context *ctx, const uint8_t *data,
+			     size_t len, bool flush)
+{
+	ARG_UNUSED(ctx); ARG_UNUSED(data); ARG_UNUSED(len); ARG_UNUSED(flush);
+	zassert_unreachable("Direct-slot cases must not copy through flash_img");
+	return -ENOTSUP;
+}
+
+static void reset_observations(void)
+{
+	atomic_clear(&boot_calls);
+	atomic_clear(&reboot_calls);
+	boot_result = -EIO;
+	hold_first_boot = false;
+	k_sem_reset(&boot_entered);
+	k_sem_reset(&boot_release);
+}
+
+static void wait_state(enum rzi_fuota_state wanted)
+{
+	for (unsigned i = 0; i < 1000; ++i) {
+		struct rzi_fuota_status s;
+		zassert_ok(rzi_fuota_get_status(&s));
+		if (s.state == wanted) {
+			return;
+		}
+		k_sleep(K_MSEC(1));
+	}
+	zassert_unreachable("Timed out waiting for Service state %d", wanted);
+}
+
+static uint8_t candidate[4096], readback[4096];
+static uint32_t complete_candidate(void)
+{
+	uint32_t generation = setup_round(0);
+	for (unsigned i = 0; i < sizeof(candidate); ++i) {
+		candidate[i] = (uint8_t)(37 * i + 11);
+	}
+	zassert_ok(hook->store(0, candidate, sizeof(candidate)));
+	start_round();
+	emit(RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE, true, 0, 0);
+	emit(RZI_LORAWAN_BACKEND_FUOTA_SESSION_ENDED, true, 0, 0);
+	wait_state(RZI_FUOTA_STATE_COMPLETE);
+	/* Let dispatcher finish its normal return, without calling apply in a callback. */
+	k_sleep(K_MSEC(20));
+	return generation;
+}
+
+ZTEST(slot, test_incomplete_and_early_reconstruction)
+{
+	reset_observations();
+	setup_round(0);
+	start_round();
+	wait_state(RZI_FUOTA_STATE_TRANSFERRING);
+	int incomplete = rzi_fuota_apply();
+	emit(RZI_LORAWAN_BACKEND_FUOTA_TRANSFER_DONE, true, 0, 0);
+	k_sleep(K_MSEC(20));
+	int early = rzi_fuota_apply();
+	zassert_equal(incomplete, -RZI_ERR_NOT_FOUND);
+	zassert_equal(early, -RZI_ERR_NOT_FOUND);
+	zassert_equal(atomic_get(&boot_calls), 0);
+	printk("APPLY_GATE early incomplete=%d reconstructed_before_end=%d boot_calls=0\n",
+	       incomplete, early);
+}
+
+ZTEST(slot, test_auto_wait_guards_and_failed_test_retention)
+{
+	reset_observations();
+	answer_pending = true;
+	uint32_t generation = complete_candidate();
+	unsigned erases_before = erase_calls;
+	hook->session_delete(generation);
+	int setup_rc = hook->session_setup(0, 128, 32, 0);
+	struct rzi_fuota_round r;
+	zassert_ok(rzi_fuota_get_round(&r));
+	zassert_equal(setup_rc, 2);
+	zassert_equal(r.generation, generation);
+	zassert_equal(erase_calls, erases_before);
+	emit(RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE, true, generation - 1, 1);
+	k_sleep(K_MSEC(20));
+	zassert_equal(atomic_get(&boot_calls), 0);
+	emit(RZI_LORAWAN_BACKEND_FUOTA_CONTROL_DONE, true, generation, 1);
+	/* Reach the real 30-second finish deadline while the answer remains pending. */
+	k_sleep(K_SECONDS(31));
+	zassert_equal(atomic_get(&boot_calls), 0, "Pending answer must hold automatic TEST");
+	answer_pending = false;
+	for (unsigned i = 0; i < 2000 && atomic_get(&boot_calls) == 0; ++i) {
+		k_sleep(K_MSEC(1));
+	}
+	zassert_equal(atomic_get(&boot_calls), 1);
+	wait_state(RZI_FUOTA_STATE_COMPLETE);
+	zassert_ok(rzi_fuota_read_image(0, readback, sizeof(readback)));
+	zassert_mem_equal(candidate, readback, sizeof(candidate));
+	int retry_rc = rzi_fuota_apply();
+	zassert_equal(retry_rc, -RZI_ERR_IO);
+	zassert_equal(atomic_get(&boot_calls), 2);
+	zassert_equal(erase_calls, erases_before);
+	zassert_equal(atomic_get(&reboot_calls), 0);
+	printk("APPLY_GATE automatic setup=%d unchanged_generation=1 unchanged_erases=1 "
+	       "pending_boot_calls=0 released_boot_calls=1 failed_TEST_readback=4096 "
+	       "retry_boot_calls=2 reboot_calls=0\n", setup_rc);
+}
+
+ZTEST(slot, test_application_thread_apply_during_finish_wait)
+{
+	reset_observations();
+	answer_pending = true;
+	complete_candidate();
+	zassert_equal(atomic_get(&boot_calls), 0);
+	boot_result = 0;
+	int rc = rzi_fuota_apply();
+	/* The public entry must not bypass the automatic finish gate. */
+	zassert_equal(atomic_get(&boot_calls), 0);
+	zassert_equal(atomic_get(&reboot_calls), 0);
+	zassert_equal(rc, -RZI_ERR_BUSY);
+	printk("APPLY_GATE pending=1 boot_calls=0 reboot_calls=0 "
+	       "caller=test_application_thread callback=0 apply_rc=%d\n", rc);
+}
+
+ZTEST(slot, test_concurrent_application_apply)
+{
+	reset_observations();
+	answer_pending = false;
+	complete_candidate();
+	hold_first_boot = true;
+	/* The unmodified automatic path owns the first TEST after its normal deadline. */
+	zassert_ok(k_sem_take(&boot_entered, K_SECONDS(35)));
+	struct rzi_fuota_status s;
+	zassert_ok(rzi_fuota_get_status(&s));
+	zassert_equal(s.state, RZI_FUOTA_STATE_APPLYING);
+	int second = rzi_fuota_apply();
+	k_sem_give(&boot_release);
+	k_sleep(K_MSEC(20));
+	wait_state(RZI_FUOTA_STATE_COMPLETE);
+	zassert_equal(atomic_get(&boot_calls), 1);
+	zassert_equal(second, -RZI_ERR_BUSY);
+	printk("APPLY_GATE concurrent=1 boot_calls=1 second_rc=%d "
+	       "first_caller=automatic second_caller=application callback=0 "
+	       "answer_pending=0 boot_first_call_deliberately_held=1\n", second);
+}
+
+
+
+#endif
+
 ZTEST_SUITE(slot, NULL, NULL, before, after, NULL);
