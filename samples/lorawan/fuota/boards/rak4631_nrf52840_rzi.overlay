@@ -2,12 +2,8 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /*
  * A board overlay replaces app.overlay, so include it first.
+ * AT uses the board alias rzi-at-uart (USB CDC). Leave zephyr,console
+ * on the board UART.
  */
 
 #include "../app.overlay"
-
-/ {
-	chosen {
-		zephyr,console = &board_cdc_acm_uart;
-	};
-};

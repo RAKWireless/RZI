@@ -2,15 +2,20 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <zephyr/device.h>
 #include <zephyr/devicetree.h>
+#include <zephyr/drivers/uart.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
 #if defined(CONFIG_HWINFO)
 #include <zephyr/drivers/hwinfo.h>
 #endif
+#include <rzi/at/at.h>
+#include <rzi/at/uart.h>
 #include <rzi/lorawan/fuota.h>
 #include <rzi/lorawan/lorawan.h>
+#include <rzi/version.h>
 
 #ifdef CONFIG_IMG_MANAGER
 #include <zephyr/dfu/mcuboot.h>
@@ -27,11 +32,14 @@ static __maybe_unused void ignore_result(int result)
 
 LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 
-#define USER_NODE          DT_PATH(zephyr_user)
-#define LORAWAN_REGION     RZI_LORAWAN_REGION_EU_868
+#define AT_UART_NODE       DT_ALIAS(rzi_at_uart)
 #define RETRY_DELAY_S      5
 #define RETRY_DELAY        K_SECONDS(RETRY_DELAY_S)
 #define UPLINK_INTERVAL_MS 5000
+
+#if !DT_NODE_EXISTS(AT_UART_NODE)
+#error "The board overlay must define the rzi-at-uart alias"
+#endif
 
 /* Firmware version reported in the boot report (major.minor.patch.build). */
 #define FW_VERSION_MAJOR 0
@@ -54,6 +62,7 @@ struct fuota_log_item {
 	bool has_event;
 };
 
+static const struct device *const at_uart = DEVICE_DT_GET(AT_UART_NODE);
 static K_SEM_DEFINE(stack_ready, 0, 1);
 static K_SEM_DEFINE(join_done, 0, 1);
 K_MSGQ_DEFINE(fuota_log_q, sizeof(struct fuota_log_item), 4, 4);
@@ -315,6 +324,39 @@ static void confirm_running_image(void)
 #endif
 }
 
+static int start_at(void)
+{
+	int rc;
+
+	if (!device_is_ready(at_uart)) {
+		return -RZI_ERR_NO_DEVICE;
+	}
+
+	/* USB CDC waits until the host opens the port. A plain UART returns. */
+	if (DT_NODE_HAS_COMPAT(AT_UART_NODE, zephyr_cdc_acm_uart)) {
+		uint32_t dtr = 0;
+
+		for (int i = 0; i < 100 && dtr == 0; i++) {
+			(void)uart_line_ctrl_get(at_uart, UART_LINE_CTRL_DTR, &dtr);
+			k_msleep(100);
+		}
+	}
+
+	rc = rzi_at_uart_init(at_uart);
+	if (rc != 0) {
+		return rc;
+	}
+	return rzi_at_publish_event("BOOT:RZI_%s_%s", rzi_version_get_string(), CONFIG_BOARD);
+}
+
+static bool credentials_stored(void)
+{
+	uint8_t stored[16];
+
+	return rzi_lorawan_get_dev_eui(stored, 8) == 0 && rzi_lorawan_get_app_eui(stored, 8) == 0 &&
+	       rzi_lorawan_get_app_key(stored, 16) == 0;
+}
+
 static int request_join(void)
 {
 	int rc;
@@ -337,16 +379,13 @@ static int request_join(void)
 
 int main(void)
 {
-	static const uint8_t dev_eui[] = DT_PROP(USER_NODE, user_lorawan_device_eui);
-	static const uint8_t join_eui[] = DT_PROP(USER_NODE, user_lorawan_join_eui);
-	static const uint8_t app_key[] = DT_PROP(USER_NODE, user_lorawan_app_key);
-	static const uint8_t gen_app_key[] = DT_PROP(USER_NODE, user_lorawan_gen_app_key);
 	static const uint8_t payload[] = "RZI FUOTA";
 	const struct uplink_log_options log_options = {
 		.device_code = DEVICE_CODE,
 		.periodic_snapshot = periodic_snapshot,
 	};
 	enum uplink_log_reset_reason reset_reason = read_reset_reason();
+	enum rzi_lorawan_region region;
 	uint32_t join_failures = 0U;
 	int64_t next_uplink;
 	int rc;
@@ -368,33 +407,22 @@ int main(void)
 		LOG_ERR("Callback registration failed: %s", rzi_err_str(rc));
 		return rc;
 	}
-	rc = rzi_lorawan_set_dev_eui(dev_eui, sizeof(dev_eui));
+	rc = start_at();
 	if (rc != 0) {
-		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
+		LOG_ERR("AT start failed: %s", rzi_err_str(rc));
 		return rc;
 	}
-	rc = rzi_lorawan_set_app_eui(join_eui, sizeof(join_eui));
+	/* AT+DEVEUI, AT+APPEUI and AT+APPKEY must already be stored. */
+	while (!credentials_stored()) {
+		k_msleep(500);
+	}
+	rc = rzi_lorawan_get_region(&region);
 	if (rc != 0) {
-		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
+		LOG_ERR("Region read failed: %s", rzi_err_str(rc));
 		return rc;
 	}
-	rc = rzi_lorawan_set_app_key(app_key, sizeof(app_key));
-	if (rc != 0) {
-		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
-		return rc;
-	}
-	rc = rzi_lorawan_set_gen_app_key(gen_app_key, sizeof(gen_app_key));
-	if (rc != 0) {
-		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
-		return rc;
-	}
-	rc = rzi_lorawan_set_activation(RZI_LORAWAN_ACTIVATION_OTAA);
-	if (rc != 0) {
-		LOG_ERR("Credentials failed: %s", rzi_err_str(rc));
-		return rc;
-	}
-	rc = rzi_lorawan_init(LORAWAN_REGION);
-	if (rc != 0) {
+	rc = rzi_lorawan_init(region);
+	if (rc != 0 && rc != -RZI_ERR_ALREADY) {
 		LOG_ERR("LoRaWAN init failed: %s", rzi_err_str(rc));
 		return rc;
 	}

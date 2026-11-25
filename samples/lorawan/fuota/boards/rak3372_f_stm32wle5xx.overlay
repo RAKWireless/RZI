@@ -1,0 +1,17 @@
+/* SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless */
+/* SPDX-License-Identifier: Apache-2.0 */
+/*
+ * A board overlay replaces app.overlay, so include it first.
+ * This sample uses LPUART1 for AT and SPI2 for the external NOR.
+ * USART1 and SPI1 stay enabled on the board for other applications.
+ */
+
+#include "../app.overlay"
+
+&usart1 {
+	status = "disabled";
+};
+
+&spi1 {
+	status = "disabled";
+};

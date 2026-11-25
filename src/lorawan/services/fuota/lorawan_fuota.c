@@ -126,7 +126,10 @@ static bool slot_session;
 static bool target_upgrade;
 static bool reconstructed;
 static bool write_failed;
+/* Boards without image-scratch keep the sector image in RAM. */
+#if !PARTITION_EXISTS(scratch_partition)
 static uint8_t page_buf[4096];
+#endif
 #endif
 
 #if CONFIG_RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0
@@ -372,6 +375,135 @@ static int copy_image_to_slot(void)
 #endif
 
 #if FUOTA_DIRECT_SLOT
+/* First 4 KB of image-scratch. MCUboot's swap trailer stays in the rest. */
+#define SCRATCH_PAGE_SIZE 4096U
+
+#if PARTITION_EXISTS(scratch_partition)
+BUILD_ASSERT(PARTITION_SIZE(scratch_partition) >= SCRATCH_PAGE_SIZE);
+
+static int copy_flash_area(const struct flash_area *src, uint32_t src_off,
+			   const struct flash_area *dst, uint32_t dst_off, size_t len)
+{
+	uint8_t chunk[APPLY_CHUNK];
+
+	while (len > 0U) {
+		size_t n = MIN(len, sizeof(chunk));
+		int rc = flash_area_read(src, src_off, chunk, n);
+
+		if (rc != 0) {
+			return rzi_err_from_errno(rc);
+		}
+		rc = flash_area_write(dst, dst_off, chunk, n);
+		if (rc != 0) {
+			return rzi_err_from_errno(rc);
+		}
+		src_off += n;
+		dst_off += n;
+		len -= n;
+	}
+	return 0;
+}
+
+/* Erase image-scratch, stage one sector there, erase the target, copy it back. */
+static int program_unit_via_scratch(uint32_t unit_off, uint32_t unit, size_t page_index,
+				    const uint8_t *data, size_t count)
+{
+	const struct flash_area *scratch = NULL;
+	uint8_t chunk[APPLY_CHUNK];
+	size_t off = 0U;
+	int rc = flash_area_open(PARTITION_ID(scratch_partition), &scratch);
+	int erase_rc;
+
+	if (rc != 0) {
+		return rzi_err_from_errno(rc);
+	}
+	if (scratch->fa_size < unit) {
+		flash_area_close(scratch);
+		return -RZI_ERR_NO_RESOURCE;
+	}
+	rc = flash_area_erase(scratch, 0, scratch->fa_size);
+	if (rc != 0) {
+		flash_area_close(scratch);
+		return rzi_err_from_errno(rc);
+	}
+	while (off < unit && rc == 0) {
+		size_t n = MIN(unit - off, sizeof(chunk));
+
+		rc = flash_area_read(slot, unit_off + off, chunk, n);
+		if (rc != 0) {
+			rc = rzi_err_from_errno(rc);
+			break;
+		}
+		if (page_index < off + n && page_index + count > off) {
+			size_t from = MAX(page_index, off);
+			size_t to = MIN(page_index + count, off + n);
+
+			memcpy(&chunk[from - off], data + (from - page_index), to - from);
+		}
+		rc = flash_area_write(scratch, off, chunk, n);
+		if (rc != 0) {
+			rc = rzi_err_from_errno(rc);
+			break;
+		}
+		off += n;
+	}
+	if (rc == 0) {
+		rc = flash_area_erase(slot, unit_off, unit);
+		if (rc != 0) {
+			rc = rzi_err_from_errno(rc);
+		}
+	}
+	if (rc == 0) {
+		rc = copy_flash_area(scratch, 0, slot, unit_off, unit);
+	}
+	erase_rc = flash_area_erase(scratch, 0, scratch->fa_size);
+	flash_area_close(scratch);
+	if (rc != 0) {
+		return rc;
+	}
+	return erase_rc == 0 ? 0 : rzi_err_from_errno(erase_rc);
+}
+
+static int program_blank_span(uint32_t offset, const uint8_t *data, size_t count, uint32_t unit_off,
+			      uint32_t unit, uint32_t align)
+{
+	uint8_t chunk[APPLY_CHUNK];
+	uint32_t start = offset & ~(align - 1U);
+	uint32_t end = ((uint32_t)(offset + count) + align - 1U) & ~(align - 1U);
+
+	if (start < unit_off) {
+		start = unit_off;
+	}
+	if (end > unit_off + unit) {
+		end = unit_off + unit;
+	}
+	while (start < end) {
+		size_t n = MIN((size_t)(end - start), sizeof(chunk));
+		int rc;
+
+		if (align > 1U && n > align) {
+			n &= ~(size_t)(align - 1U);
+		}
+		if (n == 0U) {
+			return -RZI_ERR_NO_RESOURCE;
+		}
+		memset(chunk, 0xFF, n);
+		if ((uint32_t)offset < start + n && offset + count > start) {
+			size_t from = MAX((size_t)offset, (size_t)start);
+			size_t to = MIN(offset + count, (size_t)start + n);
+
+			memcpy(&chunk[from - start], data + (from - offset), to - from);
+		}
+		rc = flash_area_write(slot, start, chunk, n);
+		if (rc != 0) {
+			return rzi_err_from_errno(rc);
+		}
+		start += n;
+	}
+	return 0;
+}
+#endif /* PARTITION_EXISTS(scratch_partition) */
+
 static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 {
 	const struct device *flash = flash_area_get_device(slot);
@@ -397,8 +529,18 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 			return -RZI_ERR_INVALID;
 		}
 		/* The SPI NOR layout page is 64 KB. Program in 4 KB sectors, which
-		 * this chip can erase and which fit in page_buf.
+		 * this chip can erase. image-scratch holds that sector while it is
+		 * rewritten; boards without scratch keep it in page_buf.
 		 */
+#if PARTITION_EXISTS(scratch_partition)
+		unit = info.size;
+		if (unit > SCRATCH_PAGE_SIZE) {
+			if ((info.size % SCRATCH_PAGE_SIZE) != 0U) {
+				return -RZI_ERR_NO_RESOURCE;
+			}
+			unit = SCRATCH_PAGE_SIZE;
+		}
+#else
 		unit = info.size;
 		if (unit > sizeof(page_buf)) {
 			if ((info.size % sizeof(page_buf)) != 0U) {
@@ -406,6 +548,7 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 			}
 			unit = sizeof(page_buf);
 		}
+#endif
 		page_end = page_off + info.size;
 		limit = page_end < slot->fa_size ? page_end : slot->fa_size;
 		unit_off = page_off + ((offset - page_off) / unit) * unit;
@@ -414,10 +557,12 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 		}
 		page_index = offset - unit_off;
 		count = MIN(unit - page_index, size);
+#if !PARTITION_EXISTS(scratch_partition)
 		rc = flash_area_read(slot, unit_off, page_buf, unit);
 		if (rc != 0) {
 			return rzi_err_from_errno(rc);
 		}
+#endif
 		align = flash_area_align(slot);
 		if (align == 0U || (align & (align - 1U)) != 0U || align > unit) {
 			return -RZI_ERR_NO_RESOURCE;
@@ -433,13 +578,44 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 			if (aligned_end > unit_off + unit) {
 				aligned_end = unit_off + unit;
 			}
+#if PARTITION_EXISTS(scratch_partition)
+			uint8_t probe[APPLY_CHUNK];
+
+			for (uint32_t i = aligned; i < aligned_end && !rewrite;) {
+				size_t n = MIN((size_t)(aligned_end - i), sizeof(probe));
+
+				rc = flash_area_read(slot, i, probe, n);
+				if (rc != 0) {
+					return rzi_err_from_errno(rc);
+				}
+				for (size_t byte = 0U; byte < n; byte++) {
+					if (probe[byte] != 0xFFU) {
+						rewrite = true;
+						break;
+					}
+				}
+				i += n;
+			}
+			/* A write block larger than the copy chunk is staged with the sector. */
+			if (align > APPLY_CHUNK) {
+				rewrite = true;
+			}
+#else
 			for (uint32_t i = aligned; i < aligned_end; i++) {
 				if (page_buf[i - unit_off] != 0xFFU) {
 					rewrite = true;
 					break;
 				}
 			}
+#endif
 		}
+#if PARTITION_EXISTS(scratch_partition)
+		if (rewrite) {
+			rc = program_unit_via_scratch(unit_off, unit, page_index, data, count);
+		} else {
+			rc = program_blank_span(offset, data, count, unit_off, unit, align);
+		}
+#else
 		memcpy(&page_buf[page_index], data, count);
 		if (rewrite) {
 			rc = flash_area_erase(slot, unit_off, unit);
@@ -455,8 +631,13 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 			}
 			rc = flash_area_write(slot, start, &page_buf[start - unit_off], end - start);
 		}
+#endif
 		if (rc != 0) {
+#if PARTITION_EXISTS(scratch_partition)
+			return rc;
+#else
 			return rzi_err_from_errno(rc);
+#endif
 		}
 		offset += count;
 		data += count;
