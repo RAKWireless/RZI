@@ -227,7 +227,7 @@ patches:
       masked across that window. The AT UART adapter supplies the drain.
 
   - path: zephyr/0013-stm32-lpuart-keep-clock-in-stop.patch
-    sha256sum: fe1c6d89b84b73d354eef2348c2ade54a8a337443e66263e3c3091056022fb78
+    sha256sum: 973067b64d32250bdd8fc6908ebb2bc19ec896366a80c25ec81fbd2fa2c048d5
     module: zephyr
     author: rzi
     email: patches@rzi.local
@@ -238,5 +238,5 @@ patches:
       Keep a wakeup-source UART kernel clock enabled across STOP when
       CONFIG_PM is on. Gating that clock drops the waking character and
       leaves TXE and TEACK clear, so AT poll writes never return. On
-      resume, clear the latched line errors and wait for TX and RX
+      resume, clear the latched line errors and wait up to 1 ms for TX and RX
       acknowledge. wakeup_source exists only with CONFIG_PM.
