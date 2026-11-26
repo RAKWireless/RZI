@@ -2,6 +2,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include <errno.h>
+#include <zephyr/app_version.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/uart.h>
@@ -40,12 +41,6 @@ LOG_MODULE_REGISTER(rzi_fuota_sample, LOG_LEVEL_INF);
 #if !DT_NODE_EXISTS(AT_UART_NODE)
 #error "The board overlay must define the rzi-at-uart alias"
 #endif
-
-/* Firmware version reported in the boot report (major.minor.patch.build). */
-#define FW_VERSION_MAJOR 0
-#define FW_VERSION_MINOR 2
-#define FW_VERSION_PATCH 0
-#define FW_VERSION_BUILD 0
 
 #if defined(CONFIG_BOARD_RAK3372_F)
 #define DEVICE_CODE UPLINK_LOG_MODULE_RAK3172_F
@@ -293,11 +288,11 @@ static enum uplink_log_reset_reason read_reset_reason(void)
 static void submit_boot_report(enum uplink_log_reset_reason reset_reason, uint32_t join_failures)
 {
 	const struct uplink_log_boot boot = {
-		.fw_version = {FW_VERSION_MAJOR, FW_VERSION_MINOR, FW_VERSION_PATCH,
-			       FW_VERSION_BUILD},
+		.fw_version = {APP_VERSION_MAJOR, APP_VERSION_MINOR, APP_PATCHLEVEL, APP_TWEAK},
 		.reset_reason = reset_reason,
 		.cap_fuota = true,
 		.cap_full = true,
+		.cap_rollback = IS_ENABLED(CONFIG_MCUBOOT_BOOTLOADER_MODE_SWAP_SCRATCH),
 		.join_fail_count = (uint8_t)MIN(join_failures, UINT8_MAX),
 	};
 	int rc = uplink_log_submit_boot(&boot);
@@ -390,8 +385,8 @@ int main(void)
 	int64_t next_uplink;
 	int rc;
 
-	LOG_INF("RZI LoRaWAN FUOTA sample %d.%d.%d.%d", FW_VERSION_MAJOR, FW_VERSION_MINOR,
-		FW_VERSION_PATCH, FW_VERSION_BUILD);
+	LOG_INF("RZI LoRaWAN FUOTA sample %d.%d.%d.%d", APP_VERSION_MAJOR, APP_VERSION_MINOR,
+		APP_PATCHLEVEL, APP_TWEAK);
 	rc = uplink_log_rzi_init(&log_options);
 	if (rc != UPLINK_LOG_OK) {
 		LOG_ERR("Uplink log init failed: %d", rc);
