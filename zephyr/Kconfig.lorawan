@@ -121,6 +121,24 @@ config RZI_LORAWAN_FUOTA_KEEPALIVE_PORT
 	default 2
 	depends on RZI_LORAWAN_FUOTA_KEEPALIVE_INTERVAL_S > 0
 
+config RZI_LORAWAN_FUOTA_DIFF
+	bool "Differential FUOTA decoder"
+	default n
+	help
+	  Link the HPatchLite decoder and the tinyuz decompressor. The
+	  encoder, zlib, and lzma stay out of the firmware. Leave this off
+	  unless the image must restore an HPatchLite patch.
+
+config RZI_LORAWAN_FUOTA_HEADER_OFFSET
+	int "Offset of the 32-byte business header inside the storage partition"
+	range 0 8192
+	default 0
+	help
+	  The detailed design maps the first 32 logical bytes of a package to
+	  storage.header_slot. The board owner must confirm that this range is
+	  not used by settings/NVS. The sector containing the offset is erased
+	  at session setup.
+
 config RZI_LORAWAN_FUOTA_HW_VERSION
 	hex "Hardware version reported to FMP"
 	default 0x1

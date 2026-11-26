@@ -38,7 +38,26 @@ zephyr_library_sources_ifdef(
 )
 
 zephyr_library_sources_ifdef(CONFIG_RZI_LORAWAN_FUOTA
-  services/fuota/lorawan_fuota.c)
+  services/fuota/lorawan_fuota.c
+  services/fuota/fuota_header.c
+  services/fuota/fuota_install.c)
+
+if(CONFIG_RZI_LORAWAN_FUOTA_DIFF)
+  set(RZI_HPATCHLITE_DIR "${ZEPHYR_BASE}/../modules/HPatchLite")
+  set(RZI_TUZ_DEC_C "${RZI_HPATCHLITE_DIR}/tinyuz/decompress/tuz_dec.c")
+  zephyr_library_sources(
+    services/fuota/fuota_diff.c
+    ${RZI_HPATCHLITE_DIR}/HDiffPatch/libHDiffPatch/HPatchLite/hpatch_lite.c
+    ${RZI_TUZ_DEC_C}
+  )
+  zephyr_library_include_directories(
+    ${RZI_HPATCHLITE_DIR}/HDiffPatch/libHDiffPatch/HPatchLite
+    ${RZI_HPATCHLITE_DIR}/tinyuz/decompress
+  )
+  set_source_files_properties(${RZI_TUZ_DEC_C} PROPERTIES
+    COMPILE_DEFINITIONS "_IS_USED_SHARE_hpatch_lite_types=1"
+  )
+endif()
 
 if(CONFIG_RZI_LORAWAN_BACKEND_ZEPHYR)
   set(RZI_ZEPHYR_MIB_C "${CMAKE_CURRENT_LIST_DIR}/backend/zephyr/lorawan_zephyr_mib.c")
