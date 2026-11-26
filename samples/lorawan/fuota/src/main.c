@@ -98,16 +98,20 @@ static const char *fuota_state_str(enum rzi_fuota_state state)
 	switch (state) {
 	case RZI_FUOTA_STATE_IDLE:
 		return "idle";
-	case RZI_FUOTA_STATE_READY:
-		return "ready";
-	case RZI_FUOTA_STATE_TRANSFERRING:
-		return "transferring";
-	case RZI_FUOTA_STATE_COMPLETE:
-		return "complete";
+	case RZI_FUOTA_STATE_PRECONFIG:
+		return "preconfig";
+	case RZI_FUOTA_STATE_RECEIVING:
+		return "receiving";
+	case RZI_FUOTA_STATE_VERIFYING:
+		return "verifying";
+	case RZI_FUOTA_STATE_INSTALLING:
+		return "installing";
+	case RZI_FUOTA_STATE_RUNNING_NEW:
+		return "running_new";
+	case RZI_FUOTA_STATE_REPORTING:
+		return "reporting";
 	case RZI_FUOTA_STATE_FAILED:
 		return "failed";
-	case RZI_FUOTA_STATE_APPLYING:
-		return "applying";
 	default:
 		return "unknown";
 	}
@@ -173,8 +177,16 @@ static void queue_fuota_result(const struct rzi_fuota_round *round, bool have_ro
 	if (have_round && round->generation != 0U) {
 		fuota_result_generation = round->generation;
 	}
-	item.code = have_round && round->write_failed ? UPLINK_LOG_EVENT_FUOTA_FLASH_FAIL
-						       : UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE;
+	struct rzi_fuota_status snapshot;
+	uint8_t reason = 0U;
+
+	if (rzi_fuota_get_status(&snapshot) == 0 &&
+	    snapshot.reason != RZI_FUOTA_REASON_NONE) {
+		reason = (uint8_t)snapshot.reason;
+	}
+	item.code = reason != 0U ? reason
+		   : (have_round && round->write_failed ? UPLINK_LOG_EVENT_FUOTA_FLASH_FAIL
+							: UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE);
 	queue_fuota_log(&item);
 }
 
@@ -183,7 +195,7 @@ static void on_fuota_state(enum rzi_fuota_state state, void *user_data)
 	ARG_UNUSED(user_data);
 	LOG_INF("FUOTA %s", fuota_state_str(state));
 	/* The session ended before reconstruction reported a result. */
-	if (fuota_state == RZI_FUOTA_STATE_TRANSFERRING && state == RZI_FUOTA_STATE_READY) {
+	if (fuota_state == RZI_FUOTA_STATE_RECEIVING && state == RZI_FUOTA_STATE_PRECONFIG) {
 		struct rzi_fuota_round round;
 		bool have_round = rzi_fuota_get_round(&round) == 0;
 
@@ -390,6 +402,7 @@ int main(void)
 	int64_t next_uplink;
 	int rc;
 
+	(void)rzi_fuota_set_device_code(DEVICE_CODE);
 	LOG_INF("RZI LoRaWAN FUOTA sample %d.%d.%d.%d", FW_VERSION_MAJOR, FW_VERSION_MINOR,
 		FW_VERSION_PATCH, FW_VERSION_BUILD);
 	rc = uplink_log_rzi_init(&log_options);

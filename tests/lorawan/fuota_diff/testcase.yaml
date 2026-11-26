@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 RAKwireless
+# SPDX-License-Identifier: Apache-2.0
+tests:
+  rzi.lorawan.fuota_diff:
+    tags:
+      - rzi
+      - lorawan
+      - fuota
+    platform_allow:
+      - native_sim
+    integration_platforms:
+      - native_sim

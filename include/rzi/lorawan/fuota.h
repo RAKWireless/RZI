@@ -38,18 +38,38 @@ extern "C" {
 
 /** Observable FUOTA session states. */
 enum rzi_fuota_state {
-	/** Service is not active or the device is not joined. */
+	/** Idle in Class A; no session is configured. */
 	RZI_FUOTA_STATE_IDLE,
-	/** Joined and waiting for a ChirpStack or network-server session. */
-	RZI_FUOTA_STATE_READY,
-	/** A multicast fragment session is active. */
-	RZI_FUOTA_STATE_TRANSFERRING,
-	/** The backend reconstructed a complete firmware image. */
-	RZI_FUOTA_STATE_COMPLETE,
-	/** The latest session failed to reconstruct an image. */
+	/** Clock, multicast group, fragment session or Class C setup. */
+	RZI_FUOTA_STATE_PRECONFIG,
+	/** Class C fragment reception is in progress. */
+	RZI_FUOTA_STATE_RECEIVING,
+	/** Business header check and, for a delta, patch restore. */
+	RZI_FUOTA_STATE_VERIFYING,
+	/** Image pending, waiting for the reboot hook. */
+	RZI_FUOTA_STATE_INSTALLING,
+	/** New image is running and waiting for confirmation. */
+	RZI_FUOTA_STATE_RUNNING_NEW,
+	/** Result reporting until the uplink is acknowledged. */
+	RZI_FUOTA_STATE_REPORTING,
+	/** The latest session failed. */
 	RZI_FUOTA_STATE_FAILED,
-	/** Image installation or reboot is in progress. */
-	RZI_FUOTA_STATE_APPLYING,
+};
+
+/** Reason recorded for the latest failed session. Values match FPort 101. */
+enum rzi_fuota_reason {
+	RZI_FUOTA_REASON_NONE = 0x00,
+	RZI_FUOTA_REASON_FAIL = 0x03,
+	RZI_FUOTA_REASON_DELTA_APPLY_FAIL = 0x05,
+	RZI_FUOTA_REASON_SIGN_FAIL = 0x06,
+	RZI_FUOTA_REASON_FLASH_FAIL = 0x07,
+	RZI_FUOTA_REASON_FRAG_INCOMPLETE = 0x08,
+	RZI_FUOTA_REASON_HDR_INVALID = 0x11,
+	RZI_FUOTA_REASON_HDR_DEVICE = 0x12,
+	RZI_FUOTA_REASON_HDR_VERSION = 0x13,
+	RZI_FUOTA_REASON_HDR_BASE = 0x14,
+	RZI_FUOTA_REASON_HDR_LENGTH = 0x15,
+	RZI_FUOTA_REASON_HDR_CRC = 0x16,
 };
 
 /** Snapshot returned by @ref rzi_fuota_get_status. */
@@ -62,6 +82,8 @@ struct rzi_fuota_status {
 	size_t image_size;
 	/** Zero, or the negative RZI_ERR_* from the latest failure. */
 	int last_error;
+	/** Reason of the latest failure, or RZI_FUOTA_REASON_NONE. */
+	enum rzi_fuota_reason reason;
 };
 
 /**
@@ -125,6 +147,13 @@ __must_check int rzi_fuota_init(void);
  * @note Thread context only.
  */
 __must_check int rzi_fuota_get_status(struct rzi_fuota_status *status);
+
+/**
+ * @brief Set the local device code used to validate package headers.
+ *
+ * Zero disables the model check. Call before the first FUOTA session.
+ */
+int rzi_fuota_set_device_code(uint8_t device_code);
 
 /**
  * @brief One accepted fragmentation round.
