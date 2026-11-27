@@ -19,12 +19,12 @@ See also: [fuota.md](../api/fuota.md).
    application-only image is not flashed with no bootloader at 0x0.
 4. First flash and recovery: flash the **merged image**
    (`merged_<board>.hex`) from the build directory, not `zephyr.hex`.
-5. Later upgrades on dual-slot boards: USP FUOTA descriptor 0 writes the
-   signed image into **slot1** (`image-1`). After the multicast window RZI
-   requests a test upgrade and reboots so MCUboot can swap or overwrite.
-   Descriptor `0x304B4152` (ASCII `RAK0`) writes `fuota_delta` and does not
-   reboot.
-   RZI uses partition names, not a board-specific absolute address.
+5. With USP FUOTA on dual-slot boards, descriptor 0 writes the signed
+   MCUboot image into **slot1** (`image-1`). After the multicast window and
+   the local StatusAns wait, RZI requests a test upgrade and reboots.
+   Descriptor `0x304B4152` (ASCII `RAK0`) writes to `fuota_delta` when that
+   partition is present. The file stays in the partition and the device
+   does not reboot. See the [device-side FUOTA flow](../api/fuota.md#device-side-flow).
    Single-slot boards (3372) have no `image-1`, so they do not support
    FUOTA. Reflash the merged image.
 
@@ -35,7 +35,7 @@ Adding a board only adds that board's DTS and flash notes.
 |---|---|---|---|
 | `rak4631/nrf52840/rzi` | RZI RAK4631 | `rak4631/nrf52840/rzi` | MCUBoot and LoRaWAN samples wired |
 | `rak3172/stm32wle5xx/rzi` | RZI RAK3372 | `rak3172/stm32wle5xx/rzi` | Single-slot MCUBoot; on-chip SUBGHZ (USP patch); no FUOTA |
-| `rak3372_f` | RAK3372-F | `rak3372_f/stm32wle5xx` | Overwrite-only MCUBoot; image-1 on the on-module MX25L400; FUOTA |
+| `rak3372_f` | RAK3372-F | `rak3372_f/stm32wle5xx` | MCUboot scratch swap; secondary slot on MX25L400 |
 | `rak3362` | RAK3362 | `rak3362/nrf54l15/cpuapp` | Overwrite-only MCUBoot; SX1262 on SPI22; console and AT on uart20 |
 
 nRF52840 (RAK4631) keeps the upstream Zephyr boot and slot
@@ -88,55 +88,33 @@ upstream nRF54L15 boards without FLPR:
 | `storage` | `0x174000` | 28 KB | Zephyr settings / NVS |
 | `lora_context` | `0x17b000` | 8 KB | LoRa Basics Modem context |
 
-RAK3372-F uses a larger boot partition than RAK3372, because MCUboot
-must drive the MX25L400, and adds the secondary slot on that NOR:
+### RAK3372-F flash layout
 
-| Partition | Device | Address | Size | Use |
+The STM32WLE5 internal flash holds MCUboot and the primary image. MCUboot
+uses the on-module MX25L400 SPI NOR for the secondary image and scratch.
+Offsets below are relative to the start of each flash device.
+
+| Partition | Device | Offset | Size | Use |
 |---|---|---|---|---|
-| `mcuboot` | internal | `0x00000` | 48 KB | Sole bootloader (includes the SPI NOR driver) |
-| `image-0` | internal | `0x0c000` | 208 KB | RZI application |
-| `image-1` | MX25L400 | `0x00000` | 208 KB | FUOTA / overwrite |
-| `storage` | MX25L400 | `0x34000` | 8 KB | Zephyr settings / NVS |
-| `lora_context` | MX25L400 | `0x36000` | 8 KB | LoRa Basics Modem context |
+| `mcuboot` | Internal flash | `0x00000` | 48 KiB | Bootloader with SPI NOR support |
+| `image-0` | Internal flash | `0x0c000` | 208 KiB | Primary image |
+| `image-1` | MX25L400 | `0x00000` | 208 KiB | Secondary image |
+| `image-scratch` | MX25L400 | `0x34000` | 8 KiB | Swap scratch, two 4 KiB erase sectors |
+| `fuota_delta` | MX25L400 | `0x36000` | 32 KiB | Reassembly for descriptor `RAK0` |
+| `storage` | MX25L400 | `0x3e000` | 8 KiB | Zephyr settings / NVS |
+| `lora_context` | MX25L400 | `0x40000` | 8 KiB | LoRa Basics Modem context |
 
-### RAK3372-F partition migration
+For development, build with sysbuild and flash
+`merged_rak3372_f_stm32wle5xx.hex` so the bootloader and application use
+the same partition layout.
 
-The RAK3372-F layout moved settings and LoRa Basics Modem context onto the
-MX25L400 so both image slots could grow by 16 KB:
+The RAK3372-F board defaults to `MCUBOOT_MODE_SWAP_SCRATCH`. RAK4631 and
+RAK3362 default to overwrite-only, and RAK3372 defaults to
+`MCUBOOT_MODE_SINGLE_APP`.
 
-| Layout | `image-0` | `storage` | `lora_context` | `image-1` |
-|---|---|---|---|---|
-| Legacy (200 KB) | 200 KB at `0x0c000` | 8 KB at `0x3e000` (shared) | shared with `storage` | 200 KB |
-| Prior (192 KB) | 192 KB at `0x0c000` | 8 KB at `0x3c000` (internal) | 8 KB at `0x3e000` (internal) | 192 KB |
-| Current | 208 KB at `0x0c000` | 8 KB at `0x34000` (MX25) | 8 KB at `0x36000` (MX25) | 208 KB |
-
-The MCUboot image, application image and external slot geometry must use the
-same layout. Do not install a current application over an older MCUboot with
-a mismatched slot size. The old bootloader will use the previous trailer
-offset and can interpret settings or modem context data as swap metadata.
-
-For a device that has ever run a previous layout:
-
-1. Back up credentials that cannot be regenerated. Treat NVS and modem
-   context as incompatible with the new layout (and now on external flash).
-2. Erase the STM32 internal flash and the used region of the MX25L400.
-3. Build with sysbuild and flash
-   `merged_rak3372_f_stm32wle5xx.hex`.
-4. Power-cycle the board so the STM32 and MX25L400 both start from a known
-   hardware state.
-5. Re-provision application settings and rejoin the LoRaWAN network.
-6. Invalidate or erase any old image in external `image-1` before the first
-   FUOTA test with the 208 KB layout.
-
-Flash the merged image whenever the installed MCUboot version or layout is
-unknown. Downgrading to a prior layout is also a destructive migration:
-use a full erase and the matching merged image, and expect settings to be
-lost.
-
-Sysbuild mode comes from the board `Kconfig.sysbuild`: 4631, 3362, and
-3372-F are overwrite-only; 3372 is `MCUBOOT_MODE_SINGLE_APP`. The radio is the
-STM32WLE5 on-chip SUBGHZ (`st,stm32wl-subghz-radio`). The USP driver
-needs `zephyr/patches/usp_zephyr/0005-stm32wl-subghz-radio.patch`.
+On RAK3372-F, the STM32WLE5 on-chip SUBGHZ radio
+(`st,stm32wl-subghz-radio`) uses the USP driver patch
+`zephyr/patches/usp_zephyr/0005-stm32wl-subghz-radio.patch`.
 
 This is **not** compatible with RUI3 / factory Arduino boot: no `AT+BOOT`,
 `nrfutil`, or UF2. Moving to RZI is a one-time SWD boot change, the same

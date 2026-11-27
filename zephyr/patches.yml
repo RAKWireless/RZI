@@ -189,6 +189,20 @@ patches:
       (both default y) so firmware can exclude lorawan_certification.c and
       smtc_modem_test.c.
 
+  - path: usp_zephyr/0017-context-erase-follows-device-page.patch
+    sha256sum: 9ed2540fafcf2a19186ffad03ec5072f4c85f98cbb6dcfa25d23af1a68f7f34f
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-26
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Size the LoRaWAN context read-modify-write buffer to at least 4 KiB
+      and erase the page reported by the flash device that holds the context
+      partition. The internal STM32WL page is 2 KiB, which the MX25L400
+      rejects because its sector is 4 KiB.
+
   - path: zephyr/0009-stm32wl-locked-pm-resume.patch
     sha256sum: 22b3f283240da422119fcb8ccb2cd0f39f62f153073ec22a23086749eee19b92
     module: zephyr
@@ -244,3 +258,18 @@ patches:
       Drain the STM32WL LPUART FIFO after STOP and before the PM core
       restores clocks. Apply after zephyr/0009, which leaves wake IRQs
       masked across that window. The AT UART adapter supplies the drain.
+
+  - path: zephyr/0013-stm32-lpuart-keep-clock-in-stop.patch
+    sha256sum: 973067b64d32250bdd8fc6908ebb2bc19ec896366a80c25ec81fbd2fa2c048d5
+    module: zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-18
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Keep a wakeup-source UART kernel clock enabled across STOP when
+      CONFIG_PM is on. Gating that clock drops the waking character and
+      leaves TXE and TEACK clear, so AT poll writes never return. On
+      resume, clear the latched line errors and wait up to 1 ms for TX and RX
+      acknowledge. wakeup_source exists only with CONFIG_PM.

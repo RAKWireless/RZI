@@ -69,8 +69,8 @@ void uplink_log_frame_periodic(uint8_t frame[UPLINK_LOG_FRAME_SIZE], uint8_t dev
 	p[4] = uplink_log_frame_rssi(periodic->rssi_dbm);
 	p[5] = (uint8_t)periodic->snr_db;
 	p[6] = periodic->tx_fail_count;
-	p[7] = (uint8_t)(periodic->health &
-			 (UPLINK_LOG_HEALTH_SENSOR | UPLINK_LOG_HEALTH_POWER | UPLINK_LOG_HEALTH_SYSTEM));
+	p[7] = (uint8_t)(periodic->health & (UPLINK_LOG_HEALTH_SENSOR | UPLINK_LOG_HEALTH_POWER |
+					     UPLINK_LOG_HEALTH_SYSTEM));
 }
 
 void uplink_log_frame_record(uint8_t frame[UPLINK_LOG_FRAME_SIZE], uint8_t device_code,

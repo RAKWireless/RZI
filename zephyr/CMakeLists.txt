@@ -72,4 +72,9 @@ if(CONFIG_RZI)
       ${CMAKE_CURRENT_BINARY_DIR}/rzi-power
     )
   endif()
+
+  add_subdirectory(
+    ${ZEPHYR_CURRENT_MODULE_DIR}/src/boot
+    ${CMAKE_CURRENT_BINARY_DIR}/rzi-boot
+  )
 endif()

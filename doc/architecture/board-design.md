@@ -10,7 +10,7 @@ See also: [architecture.md](overview.md), [boot.md](boot.md), [lorawan-backends.
 
 ## 1. Scope and board selection
 
-RZI reuses upstream hardware definitions and maintains product-specific choices. Partition addresses, flashing, and migration are documented in [boot.md](boot.md).
+RZI reuses upstream hardware definitions and maintains product-specific choices. Partition addresses and flashing are documented in [boot.md](boot.md).
 
 <a id="variant-rule"></a>
 
@@ -134,11 +134,11 @@ This compares the upstream standard RAK3172 definition with the RAK3172-F module
 | Application clock | HSE -> PLL -> 48 MHz | MSI -> 48 MHz | Separate CPU/radio clocks; test startup and low-power resume. |
 | Console | Upstream USART1 PB6/PB7 | Product LPUART1 PA2/PA3; USART2 disabled | Carrier wiring and conflicts. |
 | Module NOR | Not defined | SPI2, 512 KiB; CS PB9, SCK PB10, MOSI PC1, MISO PC2 | Assembly, capacity, pins, JEDEC ID. |
-| Image layout | Internal boot 32 KiB; two 108 KiB slots | Internal boot 48 KiB, primary 192 KiB; external secondary 192 KiB | MCUboot/application addresses, sizes, and devices must agree. |
+| Image layout | Internal boot 32 KiB; two 108 KiB slots | Internal boot 48 KiB and primary 208 KiB; external secondary 208 KiB and scratch 8 KiB | MCUboot/application addresses, sizes, and devices must agree. |
 
 The standard RAK3172 RZI variant retains the upstream RF switch but changes console and partitions; its final settings are not the upstream defaults in this table.
 
-RAK3372-F uses an independent definition to own module wiring, clocks, and storage. These differences justify its configuration, not a universal rule requiring independent boards. See [boot.md](boot.md) for layout/migration.
+RAK3372-F uses an independent definition to own module wiring, clocks, and storage. These differences justify its configuration, not a universal rule requiring independent boards. See the [RAK3372-F flash layout](boot.md#rak3372-f-flash-layout).
 
 <a id="checks"></a>
 

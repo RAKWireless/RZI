@@ -12,6 +12,9 @@ path = [
     ".vscode/**",
     ".github/rulesets/*.json",
     "samples/lorawan/fuota/test_payload/**",
+    "samples/lorawan/fuota/VERSION",
+    "tests/lorawan/fuota_fec/**",
+    "tests/lorawan/fuota_storage_lifecycle/**",
     "zephyr/patches.yml",
 ]
 precedence = "aggregate"

@@ -50,5 +50,5 @@ manifest:
     - name: HPatchLite
       path: modules/HPatchLite
       url: https://github.com/candy-1020/HPatchLite
-      revision: 6c9e469b03b694ef71f7b8972e0af086c5980bac # main
+      revision: 6c9e469b03b694ef71f7b8972e0af086c5980bac
       submodules: true
