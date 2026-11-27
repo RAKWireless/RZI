@@ -28,7 +28,31 @@ def load(name: str, relative: str):
 
 PKG = load("fuota_package", "builds/fuota_package.py")
 PACK = load("pack_image", "builds/pack_image.py")
-SIGN = load("sign_image", "builds/sign_image.py")
+def sign_file(source, output, key, version, header_size, slot_size, align, imgtool):
+    """Sign one image with the repository imgtool (test helper)."""
+    subprocess.run(
+        [
+            *imgtool,
+            "sign",
+            "--key",
+            str(key),
+            "--align",
+            str(align),
+            "--version",
+            version.imgtool(),
+            "--header-size",
+            str(header_size),
+            "--slot-size",
+            str(slot_size),
+            "--pad-header",
+            str(source),
+            str(output),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
 
 
 def mcuboot_image(payload: bytes = b"application-body") -> bytes:
@@ -170,67 +194,6 @@ class PackageTests(unittest.TestCase):
         return temporary_dir()
 
 
-class SignPolicyTests(unittest.TestCase):
-    def test_key_inside_the_repository_is_refused(self) -> None:
-        with temporary_dir() as repo:
-            key = repo / "secret.pem"
-            key.write_text("not a key\n", encoding="utf-8")
-            self.assertIn("outside", SIGN.key_policy_error(key, repo))
-
-    def test_sample_key_name_is_refused_even_outside_the_repository(self) -> None:
-        with self._temp() as directory:
-            key = directory / "root-ec-p256.pem"
-            key.write_text("sample\n", encoding="utf-8")
-            self.assertIn("sample", SIGN.key_policy_error(key, ROOT))
-
-    def test_sign_command_uses_the_external_key_and_imgtool_version(self) -> None:
-        version = PKG.parse_version("1.2.3.4")
-        key = Path("C:/secure/fuota-sign.pem")
-        command = SIGN.sign_command(
-            ["imgtool"],
-            key,
-            version,
-            0x200,
-            0x30000,
-            8,
-            Path("zephyr.bin"),
-            Path("zephyr.signed.bin"),
-        )
-        self.assertEqual(command[1], "sign")
-        self.assertIn("--pad-header", command)
-        self.assertIn("1.2.3+4", command)
-        self.assertIn(str(key), command)
-        self.assertEqual(command[-1], str(Path("zephyr.signed.bin")))
-
-    def test_cli_refuses_a_missing_key_without_writing_output(self) -> None:
-        with self._temp() as directory:
-            image = directory / "zephyr.bin"
-            image.write_bytes(b"\x00" * 16)
-            output = directory / "zephyr.signed.bin"
-            code = SIGN.main(
-                [
-                    str(image),
-                    "-o",
-                    str(output),
-                    "--key",
-                    str(directory / "missing.pem"),
-                    "--version",
-                    "1.0.0+0",
-                    "--header-size",
-                    "0x200",
-                    "--slot-size",
-                    "0x30000",
-                    "--align",
-                    "8",
-                ]
-            )
-            self.assertEqual(code, 1)
-            self.assertFalse(output.is_file())
-
-    def _temp(self):
-        return temporary_dir()
-
-
 class DiffPackageTests(unittest.TestCase):
     def test_diff_header_survives_verify(self) -> None:
         base = PKG.parse_version("1.0.0+0")
@@ -311,8 +274,8 @@ class DiffPackageTests(unittest.TestCase):
             new_signed = out / "new.signed.bin"
             old_raw.write_bytes(b"\x11" * 128)
             new_raw.write_bytes(b"\x22" * 256)
-            imgtool = SIGN.find_imgtool(str(IMGTOOL))
-            SIGN.sign_file(
+            imgtool = [sys.executable, str(IMGTOOL)]
+            sign_file(
                 old_raw,
                 old_signed,
                 key,
@@ -322,7 +285,7 @@ class DiffPackageTests(unittest.TestCase):
                 8,
                 imgtool,
             )
-            SIGN.sign_file(
+            sign_file(
                 new_raw,
                 new_signed,
                 key,

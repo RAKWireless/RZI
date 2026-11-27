@@ -1,60 +1,93 @@
-# 编译机上的三个工具
+# 编译机上的两个工具
 
-这三个文件只在电脑上运行，不编进设备固件。顺序是先签名，再打包。全量包和差分包共用同一套 32 字节头。
+这两个文件只在电脑上运行，不编进设备固件。签名由构建系统完成（sysbuild 调用 imgtool），`pack_image.py` 负责给已签名镜像套 32 字节头。
 
 | 文件 | 票 | 干什么 |
 | --- | --- | --- |
-| `sign_image.py` | 167 | 给编译出来的 `zephyr.bin` 盖章，并马上检查章是真的 |
-| `pack_image.py` | 165、169 | 给已经盖过章的镜像套上业务头。`pack` 是整包，`diff` 是补丁 |
+| `pack_image.py` | 165、169 | 给已经签过名的镜像套上业务头。`pack` 是整包，`diff` 是补丁 |
 | `fuota_package.py` | 共用 | 没有命令。负责拼这 32 字节头、算 CRC 和 MD5、写文件 |
 
-头的每个字段见 `doc/fuota-diff/cn/FUOTA-165-167-169.md`。设计原文是 `03_LoRa_FUOTA详细技术设计.md` 第 2 节。
+头的每个字段见 `doc/fuota-diff/design_cn.md` 第 1 节。设计原文是 `03_LoRa_FUOTA详细技术设计_new.md` 第 2 节。
 
 ```text
 zephyr.bin
-  sign_image.py              盖章，得到 zephyr.signed.bin
-  pack_image.py pack         整份盖章镜像 + 32 字节头
-  pack_image.py diff         旧盖章镜像与新盖章镜像的补丁 + 同一套头
+  sysbuild / imgtool          签名，得到 zephyr.signed.bin
+  pack_image.py pack         整份已签名镜像 + 32 字节头
+  pack_image.py diff         旧已签名镜像与新已签名镜像的补丁 + 同一套头
 ```
 
 三层检查各管一件事：
 
 | 检查 | 谁做 | 回答的问题 |
 | --- | --- | --- |
-| MCUboot 签名 | 167 盖章，设备启动时再查一次 | 镜像是不是我们的私钥签的，有没有被改过 |
+| MCUboot 签名 | 构建时由 imgtool 签名，设备启动时再查一次 | 镜像是不是我们的私钥签的，有没有被改过 |
 | CRC-32 | 165 / 169 写在头里 | 这 32 字节头和后面的内容在传输中有没有坏 |
 | MD5 | 写在 `firmware.md5` | 整个文件在上传或保存时有没有坏 |
 
 签名不保护这 32 字节头。设备将来要先看头和 CRC，再丢掉这 32 字节，把剩下的内容交给 MCUboot。
 
-## 167：签名和验签
+## 先构建 hdiffi / hpatchi
 
-签名就是盖章。`zephyr.bin` 只是编译结果，谁都可以改。`sign_image.py` 调用 MCUboot 的 `imgtool`，用一把私钥给它盖章，写出 `zephyr.signed.bin`。设备上的 Bootloader 只保存对应的公钥，能查出章是假的或镜像被改过，但推不出私钥。
+这两个程序不在仓库里，由 `west.yml` 钉死的 HPatchLite（`6c9e469`）编译得到。
 
-验签是盖完章立刻自己检查一遍。脚本用同一把私钥再跑 `imgtool verify`。检查失败就删掉刚写出的文件，避免把一个坏镜像交给后面的打包。这一步发生在编译机上，不是设备在收包。
+```powershell
+# 1) 首次拉取模块
+west update
 
-私钥用 `--key` 或环境变量 `RZI_SIGNING_KEY`，文件必须放在本仓库外面。名字是 `root-ec-p256.pem`、`root-ed25519.pem`、`root-rsa-2048.pem` 的示例钥匙会被拒绝。设计要的是 ECDSA-P256 或 Ed25519。当前日常构建里的 `zephyr.signed.bin` 是 sysbuild 用示例钥匙 `root-rsa-2048.pem` 盖的章，那不是 167 的交付物。
+# 2) 编译（只要 tinyuz，不编 zlib/lzma）
+Push-Location ..\modules\HPatchLite
+make ZLIB=0 LZMA=0
+Pop-Location
 
-```text
-python tools/builds/sign_image.py ^
-  --key D:\secure\fuota-sign.pem ^
-  --version 1.2.3+4 ^
-  --header-size 0x200 ^
-  --slot-size 0x34000 ^
-  --align 8 ^
-  --imgtool ..\bootloader\mcuboot\scripts\imgtool.py ^
-  zephyr.bin -o zephyr.signed.bin
+# 3) 放到脚本默认查找的位置
+New-Item -ItemType Directory -Force ..\build\hpatch-host | Out-Null
+Copy-Item ..\modules\HPatchLite\hdiffi.exe, ..\modules\HPatchLite\hpatchi.exe ..\build\hpatch-host\
 ```
 
-`--header-size`、`--slot-size`、`--align` 必须和这块板的 MCUboot 一致。RAK3372-F 的槽是 208 KiB，即 `0x34000`。版本写成 `1.2.3+4` 或 `1.2.3.4`，四段都是 0 到 255。
+- Windows 没有 `make` 时，可用 `builds\vc\HPatchLite.sln`（Visual Studio）或 WSL；
+- 默认 `ZLIB=1 LZMA=1` 会把 zlib/lzma 一起编进来，FUOTA 用不到，建议关掉。
 
-自己做主机试验时，可以在仓库外生成一把钥匙：
+## 其它依赖
 
-```text
-python ..\bootloader\mcuboot\scripts\imgtool.py keygen -k D:\secure\fuota-sign.pem -t ecdsa-p256
+| 依赖 | 获取方式 |
+|---|---|
+| imgtool | `west update` 后位于 `bootloader\mcuboot\scripts\imgtool.py`，无需编译 |
+| 签名密钥 | 由构建系统或受控签名环境持有，不能进仓库；换钥要重编 Bootloader |
+| 主机 gcc | 任意 mingw-w64 / 系统 gcc |
+## 签名（由构建完成）
+
+本仓库**不提供签名脚本**。`zephyr.bin` 由构建系统签名：sysbuild 调用 MCUboot 的 `imgtool`，得到 `zephyr.signed.bin`，再交给 `pack_image.py`。
+
+构建配置（`prj.conf` 或 extra conf）：
+
+```conf
+CONFIG_BOOT_SIGNATURE_KEY_FILE="D:/secure/fuota-sign.pem"
+CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.2.3+4"
 ```
 
-这把钥匙只能验证用它自己签过的镜像。已经编进当前 MCUboot 的是那把 RSA 示例公钥，换钥匙之后要重新编译 Bootloader，设备才会认。
+- 私钥只在受控签名环境或构建机，不能进仓库；
+- 版本四段都是 0 到 255；
+- 槽参数必须和板级一致：RAK3372-F 是 208 KiB，即 `0x34000`。
+
+如果构建机不能持有私钥，在签名环境里直接用 imgtool：
+
+```text
+python bootloader\mcuboot\scripts\imgtool.py sign ^
+  --key D:\secure\fuota-sign.pem --align 8 --version 1.2.3+4 ^
+  --header-size 0x200 --slot-size 0x34000 --pad-header ^
+  zephyr.bin zephyr.signed.bin
+```
+
+签完可以自己验一次：
+
+```text
+python bootloader\mcuboot\scripts\imgtool.py verify ^
+  --key D:\secure\fuota-sign-pub.pem zephyr.signed.bin
+```
+
+设备上的 Bootloader 只保存对应公钥；换钥要重新编译 Bootloader。两版差分必须用同一把密钥签名。
+
+> 示例中的 `D:\secure\...` 是占位路径，按实际签名环境替换。
 
 ## 165：全量包
 
@@ -78,7 +111,7 @@ python tools/builds/pack_image.py verify out\fuota
 
 没有 MCUboot 章的文件只能加 `--unsigned`。输出改名为 `firmware.unsigned.bin`，不能当发布包。
 
-`vectors` 另外写四个故意错误的包。它们是父票 FUOTA-37、实现票 FUOTA-161 的输入：设备收齐后、安装前用这些包练习拒绝。161 不在这个目录，现在也还没做。合法包仍在输出目录，错误包在 `vectors\`。
+`vectors` 另外写四个故意错误的包。它们是父票 FUOTA-37、实现票 FUOTA-161 的输入：设备收齐后、安装前用这些包练习拒绝。161 的实现在设备侧，不在这个目录。合法包仍在输出目录，错误包在 `vectors\`。
 
 ```text
 python tools/builds/pack_image.py vectors ^
@@ -113,23 +146,20 @@ python tools/builds/pack_image.py diff ^
   -o out\fuota-diff
 ```
 
-`--version` 和 `--base-version` 必须就是签这两份镜像时用的版本。脚本不会从镜像里猜。`--key` 必须是签新镜像的那一把，用来检查还原结果。
+`--version` 和 `--base-version` 必须就是签这两份镜像时用的版本。脚本不会从镜像里猜。`--key` 必须是签新镜像对应的公钥，用来检查还原结果。
 
-## 怎么确认这三个工具没坏
+## 怎么确认工具没坏
 
 在 `RZI` 仓库根目录：
 
 ```text
-D:\Git_code\rzi-workspace\.venv\Scripts\python.exe tools\tests\test_fuota_package.py
+python tools\tests\test_fuota_package.py
 ```
 
-结束时应是 `Ran 12 tests` 和 `OK`。中间的 `error:` 是拒绝用例自己打印的原因。屏幕上出现这些字，同时最后一行是 `OK`，就是通过。
+结束时应是 `Ran 8 tests` 和 `OK`。中间的 `error:` 是拒绝用例自己打印的原因。屏幕上出现这些字，同时最后一行是 `OK`，就是通过。
 
 ## 相关文档
 
-- 验收对照：`doc/fuota-diff/cn/PM验收对照.md`
-- 移植与内存：`doc/fuota-diff/cn/FUOTA-156.md`
-- apply 接口：`doc/fuota-diff/cn/FUOTA-157.md`
-- Patch 调用与失败处理：`doc/fuota-diff/cn/FUOTA-158.md`
-- 头校验与状态机：`doc/fuota-diff/cn/FUOTA-161.md`
-- 设计总结：HPatchLite 仓库 `docs/差分接入架构.md`
+- 设计：`doc/fuota-diff/design_cn.md`
+- 使用：`doc/fuota-diff/usage_cn.md`
+- 票据与过程记录：`doc/fuota-diff/notes/`（不提交）

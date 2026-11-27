@@ -39,7 +39,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import fuota_package as pkg  # noqa: E402
-import sign_image  # noqa: E402
+import imgtool_util  # noqa: E402
 
 
 def _read_args(args: argparse.Namespace) -> tuple[bytes, int, pkg.Version]:
@@ -98,7 +98,7 @@ def _diff(args: argparse.Namespace) -> None:
         new_bytes = pkg.load_image(new_path, allow_unsigned=False)
         hdiffi = _tool(args.hdiffi, "hdiffi")
         hpatchi = _tool(args.hpatchi, "hpatchi")
-        imgtool = sign_image.find_imgtool(args.imgtool)
+        imgtool = imgtool_util.find_imgtool(args.imgtool)
         with tempfile.TemporaryDirectory() as name:
             temp = Path(name)
             patch_path = temp / "patch.lite"
@@ -120,8 +120,8 @@ def _diff(args: argparse.Namespace) -> None:
             if restored.read_bytes() != new_bytes:
                 raise pkg.PackageError("restored image does not match the new signed image")
             try:
-                sign_image._run(sign_image.verify_command(imgtool, key, restored))
-            except sign_image.SignError as exc:
+                imgtool_util.run(imgtool_util.verify_command(imgtool, key, restored))
+            except imgtool_util.ImgtoolError as exc:
                 raise pkg.PackageError(str(exc)) from exc
         pkg.commit_package(out_dir, blob, signed=True, build_id=args.build_id)
     except pkg.PackageError:
