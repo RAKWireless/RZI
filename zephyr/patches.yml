@@ -170,6 +170,20 @@ patches:
       (both default y) so firmware can exclude lorawan_certification.c and
       smtc_modem_test.c.
 
+  - path: usp_zephyr/0017-context-erase-follows-device-page.patch
+    sha256sum: 9ed2540fafcf2a19186ffad03ec5072f4c85f98cbb6dcfa25d23af1a68f7f34f
+    module: usp_zephyr
+    author: rzi
+    email: patches@rzi.local
+    date: 2026-11-26
+    upstreamable: true
+    apply-command: git apply
+    comments: |
+      Size the LoRaWAN context read-modify-write buffer to at least 4 KiB
+      and erase the page reported by the flash device that holds the context
+      partition. The internal STM32WL page is 2 KiB, which the MX25L400
+      rejects because its sector is 4 KiB.
+
   - path: zephyr/0009-stm32wl-locked-pm-resume.patch
     sha256sum: 22b3f283240da422119fcb8ccb2cd0f39f62f153073ec22a23086749eee19b92
     module: zephyr
