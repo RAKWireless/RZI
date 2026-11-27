@@ -120,14 +120,11 @@ selected for that session.
 `rak3172/stm32wle5xx/rzi` is single-slot (no `image-1`), so
 `CONFIG_RZI_LORAWAN_FUOTA` cannot be selected. `rak3372_f` places
 `image-1` on the on-module MX25L400 (208 KiB, same size as `image-0`).
-MCUboot mode is overwrite. A whole-image upgrade still needs a fragment
-count large enough for that slot.
-
-RAK3372-F previously used 200 KiB then 192 KiB image slots. A bootloader
-built for an older layout is not compatible with a 208 KiB update because
-the MCUboot trailer offset changes. Migrate using a matching merged image
-before testing current updates and invalidate any old external image.
-See [partition migration](../architecture/boot.md#rak3372-f-partition-migration).
+RAK3372-F defaults to MCUboot scratch swap. A whole-image upgrade needs
+enough fragments for the signed image and must fit in the secondary slot
+with the MCUboot trailer. If the installed bootloader or partition layout
+is unknown, use the matching merged image before testing updates.
+See the [RAK3372-F flash layout](../architecture/boot.md#rak3372-f-flash-layout).
 
 ## Public API
 

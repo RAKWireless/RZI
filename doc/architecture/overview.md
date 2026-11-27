@@ -537,11 +537,9 @@ Status: implemented coordination API; MCUboot product profile remains optional.
 
 ```text
 Network server -> backend FUOTA packages -> RZI state/events
-  -> reconstructed image -> flash_img copy to slot1
-  -> MCUboot validation and installation after reboot
-
-Current dual-slot product boards use overwrite-only installation.
-Rollback/test-boot behavior requires a separately configured swap profile.
+  -> reassembly into the partition selected by the fragmentation descriptor
+  -> slot1: MCUboot validation and installation after reboot
+  -> fuota_delta: retained for application use
 ```
 
 RZI owns update state and public events. The backend owns supported LoRaWAN
@@ -550,9 +548,9 @@ and installation according to the selected boot mode.
 
 FUOTA is enabled only when the backend advertises the required multicast,
 clock synchronization, and fragmentation support. Products must validate
-signed-image installation and recovery for their selected boot mode. The
-current overwrite-only boards do not provide automatic rollback; test boot
-and confirmation require a separate swap-capable product profile.
+signed-image installation and recovery for their selected boot mode.
+RAK3372-F defaults to scratch swap. RAK4631 and RAK3362 default to
+overwrite-only.
 
 ## 13. Arduino Core and RUI C++
 
