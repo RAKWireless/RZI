@@ -34,7 +34,8 @@ rzi/
             ├── 0009-stm32wl-locked-pm-resume.patch
             ├── 0010-stm32-spi-resume-config.patch
             ├── 0011-spi-nor-dpd-resume-delay.patch
-            └── 0012-stm32wl-lpuart-wakeup-drain.patch
+            ├── 0012-stm32wl-lpuart-wakeup-drain.patch
+            └── 0013-stm32-lpuart-keep-clock-in-stop.patch
 ```
 
 Pins are USP v1.2.1 and Zephyr 4.5.0. v1.2.1 already contains the former
@@ -79,7 +80,12 @@ the page reported by the flash device that holds the context partition. The
 internal STM32WL page is 2 KiB, which an MX25L400 rejects because its sector
 is 4 KiB. `zephyr/0012` drains
 the LPUART FIFO after STOP, before the PM core restores clocks. Apply it
-after `0009`.
+after `0009`. `zephyr/0013` keeps the kernel clock of a `wakeup-source` UART
+enabled across STOP when `CONFIG_PM` is on. Gating that clock drops the waking
+character and leaves `TXE` and `TEACK` clear, so a later poll write never
+returns. On resume it clears the latched line errors and waits up to 1 ms for
+`REACK` and `TEACK`. If they stay clear, resume returns `-ETIMEDOUT` instead
+of spinning.
 Drop each patch on its own once the pinned Zephyr revision contains it.
 
 ## STM32WL SUBGHZ design rationale
