@@ -19,9 +19,12 @@ See also: [fuota.md](../api/fuota.md).
    application-only image is not flashed with no bootloader at 0x0.
 4. First flash and recovery: flash the **merged image**
    (`merged_<board>.hex`) from the build directory, not `zephyr.hex`.
-5. Later upgrades on dual-slot boards: write a signed MCUBoot image into
-   **slot1** (`image-1`), then use `rzi_fuota_apply()` (LoRaWAN FUOTA).
-   RZI uses partition names, not a board-specific absolute address.
+5. With USP FUOTA on dual-slot boards, descriptor 0 writes the signed
+   MCUboot image into **slot1** (`image-1`). After the multicast window and
+   the local StatusAns wait, RZI requests a test upgrade and reboots.
+   Descriptor `0x304B4152` (ASCII `RAK0`) writes to `fuota_delta` when that
+   partition is present. The file stays in the partition and the device
+   does not reboot. See the [device-side FUOTA flow](../api/fuota.md#device-side-flow).
    Single-slot boards (3372) have no `image-1`, so they do not support
    FUOTA. Reflash the merged image.
 
