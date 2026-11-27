@@ -532,8 +532,8 @@ int boot_request_upgrade(int permanent)
 {
 	unsigned call = atomic_inc(&boot_calls) + 1;
 	zassert_equal(permanent, 0, "The existing call must request TEST");
-	printk("BOOT_DOUBLE call=%u answer_pending=%d thread=%p\n", call,
-	       answer_pending, k_current_get());
+	printk("BOOT_DOUBLE call=%u answer_pending=%d thread=%p\n", call, answer_pending,
+	       k_current_get());
 	if (hold_first_boot && call == 1) {
 		k_sem_give(&boot_entered);
 		zassert_ok(k_sem_take(&boot_release, K_SECONDS(3)));
@@ -548,10 +548,13 @@ int flash_img_init(struct flash_img_context *ctx)
 	zassert_unreachable("Direct-slot cases must not copy through flash_img");
 	return -ENOTSUP;
 }
-int flash_img_buffered_write(struct flash_img_context *ctx, const uint8_t *data,
-			     size_t len, bool flush)
+int flash_img_buffered_write(struct flash_img_context *ctx, const uint8_t *data, size_t len,
+			     bool flush)
 {
-	ARG_UNUSED(ctx); ARG_UNUSED(data); ARG_UNUSED(len); ARG_UNUSED(flush);
+	ARG_UNUSED(ctx);
+	ARG_UNUSED(data);
+	ARG_UNUSED(len);
+	ARG_UNUSED(flush);
 	zassert_unreachable("Direct-slot cases must not copy through flash_img");
 	return -ENOTSUP;
 }
@@ -648,7 +651,8 @@ ZTEST(slot, test_auto_wait_guards_and_failed_test_retention)
 	zassert_equal(atomic_get(&reboot_calls), 0);
 	printk("APPLY_GATE automatic setup=%d unchanged_generation=1 unchanged_erases=1 "
 	       "pending_boot_calls=0 released_boot_calls=1 failed_TEST_readback=4096 "
-	       "retry_boot_calls=2 reboot_calls=0\n", setup_rc);
+	       "retry_boot_calls=2 reboot_calls=0\n",
+	       setup_rc);
 }
 
 ZTEST(slot, test_application_thread_apply_during_finish_wait)
@@ -664,7 +668,8 @@ ZTEST(slot, test_application_thread_apply_during_finish_wait)
 	zassert_equal(atomic_get(&reboot_calls), 0);
 	zassert_equal(rc, -RZI_ERR_BUSY);
 	printk("APPLY_GATE pending=1 boot_calls=0 reboot_calls=0 "
-	       "caller=test_application_thread callback=0 apply_rc=%d\n", rc);
+	       "caller=test_application_thread callback=0 apply_rc=%d\n",
+	       rc);
 }
 
 ZTEST(slot, test_concurrent_application_apply)
@@ -686,10 +691,9 @@ ZTEST(slot, test_concurrent_application_apply)
 	zassert_equal(second, -RZI_ERR_BUSY);
 	printk("APPLY_GATE concurrent=1 boot_calls=1 second_rc=%d "
 	       "first_caller=automatic second_caller=application callback=0 "
-	       "answer_pending=0 boot_first_call_deliberately_held=1\n", second);
+	       "answer_pending=0 boot_first_call_deliberately_held=1\n",
+	       second);
 }
-
-
 
 #endif
 

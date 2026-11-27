@@ -157,7 +157,8 @@ static struct record *oldest_record(bool urgent)
 	for (size_t i = 0; i < UPLINK_LOG_QUEUE_DEPTH; i++) {
 		struct record *r = &s.queue[i];
 
-		if (r->seq != 0U && r->urgent == urgent && (oldest == NULL || r->seq < oldest->seq)) {
+		if (r->seq != 0U && r->urgent == urgent &&
+		    (oldest == NULL || r->seq < oldest->seq)) {
 			oldest = r;
 		}
 	}
@@ -409,7 +410,7 @@ static uint32_t next_deadline(uint32_t now)
 			/* A refused send also holds back a due boot report. */
 			consider(&next, now,
 				 (int32_t)(s.send_retry_at - s.boot_due) > 0 ? s.send_retry_at
-									      : s.boot_due);
+									     : s.boot_due);
 		}
 	}
 	if (s.periodic_armed) {
@@ -428,7 +429,8 @@ int uplink_log_init(const struct uplink_log_port *port, const struct uplink_log_
 	}
 	minutes = options->periodic_interval_min != 0U ? options->periodic_interval_min
 						       : UPLINK_LOG_PERIODIC_DEFAULT_MINUTES;
-	if (minutes < UPLINK_LOG_PERIODIC_MIN_MINUTES || minutes > UPLINK_LOG_PERIODIC_MAX_MINUTES ||
+	if (minutes < UPLINK_LOG_PERIODIC_MIN_MINUTES ||
+	    minutes > UPLINK_LOG_PERIODIC_MAX_MINUTES ||
 	    minutes % UPLINK_LOG_PERIODIC_STEP_MINUTES != 0U) {
 		return UPLINK_LOG_ERR_INVALID;
 	}
@@ -503,7 +505,8 @@ uint32_t uplink_log_process(void)
 	}
 	now = now_sec();
 	expire_records(now);
-	if (s.inflight != INFLIGHT_NONE && reached(now, s.inflight_at + UPLINK_LOG_TX_TIMEOUT_SEC)) {
+	if (s.inflight != INFLIGHT_NONE &&
+	    reached(now, s.inflight_at + UPLINK_LOG_TX_TIMEOUT_SEC)) {
 		handle_result(UPLINK_LOG_TX_FAILED, now);
 	}
 	if (s.link_up && s.periodic_armed && reached(now, s.periodic_due)) {
@@ -656,7 +659,8 @@ int uplink_log_submit_config(const struct uplink_log_config_report *config)
 
 int uplink_log_set_periodic_interval(uint16_t minutes)
 {
-	if (minutes < UPLINK_LOG_PERIODIC_MIN_MINUTES || minutes > UPLINK_LOG_PERIODIC_MAX_MINUTES ||
+	if (minutes < UPLINK_LOG_PERIODIC_MIN_MINUTES ||
+	    minutes > UPLINK_LOG_PERIODIC_MAX_MINUTES ||
 	    minutes % UPLINK_LOG_PERIODIC_STEP_MINUTES != 0U) {
 		return UPLINK_LOG_ERR_INVALID;
 	}

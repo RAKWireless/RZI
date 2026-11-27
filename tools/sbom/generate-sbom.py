@@ -83,6 +83,13 @@ WEST_PROJECT_META = {
         "cpe": None,
         "comment": "Zephyr Project fork of Semtech LoRa Basics Modem.",
     },
+    "HPatchLite": {
+        "supplier": "candy-1020",
+        "license": "MIT",
+        "copyright": "Copyright (c) 2020--2025 housisong",
+        "cpe": None,
+        "comment": "Fork of housisong's lightweight binary patch library.",
+    },
 }
 
 PURPOSE_BY_SUFFIX = {

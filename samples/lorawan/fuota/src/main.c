@@ -169,7 +169,7 @@ static void queue_fuota_result(const struct rzi_fuota_round *round, bool have_ro
 		fuota_result_generation = round->generation;
 	}
 	item.code = have_round && round->write_failed ? UPLINK_LOG_EVENT_FUOTA_FLASH_FAIL
-						       : UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE;
+						      : UPLINK_LOG_EVENT_FUOTA_FRAG_INCOMPLETE;
 	queue_fuota_log(&item);
 }
 

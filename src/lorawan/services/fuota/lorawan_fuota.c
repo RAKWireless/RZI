@@ -70,12 +70,12 @@ bool smtc_modem_fuota_business_allowed(void)
 
 LOG_MODULE_REGISTER(rzi_fuota, LOG_LEVEL_INF);
 
-#define IMAGE_MAGIC         0x96f3b83dU
-#define IMAGE_TLV_MAGIC     0x6907U
-#define IMAGE_HDR_SIZE      32U
-#define IMAGE_HEAD_LOG      16U
-#define APPLY_CHUNK         256U
-#define FUOTA_FINISH_WAIT_S 30
+#define IMAGE_MAGIC          0x96f3b83dU
+#define IMAGE_TLV_MAGIC      0x6907U
+#define IMAGE_HDR_SIZE       32U
+#define IMAGE_HEAD_LOG       16U
+#define APPLY_CHUNK          256U
+#define FUOTA_FINISH_WAIT_S  30
 #define FUOTA_CONTROL_STATUS BIT(0)
 #define FUOTA_CONTROL_DELETE BIT(1)
 
@@ -156,8 +156,8 @@ static void set_state_locked(enum rzi_fuota_state next)
 		return;
 	}
 	state = next;
-	atomic_set(&business_blocked, next == RZI_FUOTA_STATE_TRANSFERRING ||
-					      next == RZI_FUOTA_STATE_APPLYING);
+	atomic_set(&business_blocked,
+		   next == RZI_FUOTA_STATE_TRANSFERRING || next == RZI_FUOTA_STATE_APPLYING);
 #if defined(CONFIG_RZI_POWER)
 	{
 		bool want =
@@ -629,7 +629,8 @@ static int slot_program(uint32_t offset, const uint8_t *data, size_t size)
 			if (end > unit_off + unit) {
 				end = unit_off + unit;
 			}
-			rc = flash_area_write(slot, start, &page_buf[start - unit_off], end - start);
+			rc = flash_area_write(slot, start, &page_buf[start - unit_off],
+					      end - start);
 		}
 #endif
 		if (rc != 0) {
