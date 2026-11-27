@@ -177,7 +177,7 @@ def github_slug(url: str) -> str:
 def revision_tags(manifest_text: str) -> dict[str, str]:
     """Map each pinned SHA to the release tag noted in its trailing comment."""
     tags = {}
-    for match in re.finditer(r"revision:\s*([0-9a-f]{40})\s*#\s*(\S+)", manifest_text):
+    for match in re.finditer(r"revision:[ \t]*([0-9a-f]{40})[ \t]*#[ \t]*(\S+)", manifest_text):
         tags[match.group(1)] = match.group(2)
     return tags
 
