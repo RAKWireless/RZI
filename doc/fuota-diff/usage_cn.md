@@ -2,7 +2,7 @@
 
 日期：2026-11-26  
 适用：`feat/fuota-diff`（基线 `fuota a70713b`）  
-环境：Windows + west 工作区 `D:\Git_code\rzi-workspace`
+环境：Windows + west 工作区（以下命令在 west 工作区根目录执行，仓库位于 `RZI/`）
 
 ---
 
@@ -16,7 +16,8 @@
 | imgtool | `bootloader\mcuboot\scripts\imgtool.py` | 签名/验签 |
 | 测试密钥 | `build\keys\test_3172-f.pem`（私钥）、`test_3172-f-pub.pem`（公钥） | 仅测试，禁止发布 |
 
-> 私钥必须在仓库外；`sign_image.py` 会拒绝仓库内路径和 MCUboot 示例密钥。
+> 签名密钥由构建系统或受控签名环境持有，不能进入仓库。
+> `hdiffi`/`hpatchi` 不在仓库里，构建方法见 `tools/builds/README.md`（`west update` 后进 `modules/HPatchLite` 执行 `make ZLIB=0 LZMA=0`）。
 
 ## 1. 构建
 
@@ -26,8 +27,10 @@ west build --sysbuild -b rak3372_f/stm32wle5xx -d build/merge-nodiff rzi/samples
 
 # 差分开启
 west build --sysbuild -b rak3372_f/stm32wle5xx -d build/merge-check rzi/samples/lorawan/fuota `
-  -- "-DEXTRA_CONF_FILE=build/diff-enable.conf"
+  -- "-DEXTRA_CONF_FILE=$($PWD.Path)\build\diff-enable.conf"
 ```
+
+> `EXTRA_CONF_FILE` 的相对路径会被解析到应用目录，必须给绝对路径（上面用 `$PWD`）。
 
 `build/diff-enable.conf`：
 
@@ -37,20 +40,51 @@ CONFIG_RZI_LORAWAN_FUOTA_DIFF=y
 
 产物：`build/<dir>/fuota/zephyr/zephyr.bin`（未签名）、`zephyr.signed.bin`（sysbuild 已签）。
 
-## 2. 签名
+### 1.1 功能开关
 
-```powershell
-python RZI\tools\builds\sign_image.py build\merge-check\fuota\zephyr\zephyr.bin `
-  -o out\new.signed.bin `
-  --key build\keys\test_3172-f.pem `
-  --version 1.2.0+3 `
-  --header-size 0x200 --slot-size 0x34000 --align 8 `
-  --imgtool bootloader\mcuboot\scripts\imgtool.py
+| 功能 | 开关 | 默认 | 说明 |
+|---|---|---|---|
+| FUOTA 组件 | `CONFIG_RZI_LORAWAN_FUOTA` | 样例 `y` | 关掉后 156/157/158/161 都不编译 |
+| 差分解码 | `CONFIG_RZI_LORAWAN_FUOTA_DIFF` | `n` | 打开才链接 `hpatch_lite`/`tuz_dec`；关闭时 `RAK0` 会话仍可建立，但安装返回 `-RZI_ERR_NOT_SUPPORTED` |
+| 头缓存回退偏移 | `CONFIG_RZI_LORAWAN_FUOTA_HEADER_OFFSET` | `0` | 仅没有 `scratch` 分区的板子使用 |
+| 构建签名 | `CONFIG_BOOT_SIGNATURE_KEY_FILE`、`CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` | 板级 | 见 §2 |
+
+157/158/161 没有单独开关，随 `CONFIG_RZI_LORAWAN_FUOTA` 一起编译并自动生效。
+
+## 2. 签名（由构建完成）
+
+本仓库**不提供签名脚本**。签名由构建系统完成：sysbuild 调用 MCUboot 的 `imgtool`，产出 `zephyr.signed.bin`。
+
+构建配置（`prj.conf` 或 extra conf）：
+
+```conf
+CONFIG_BOOT_SIGNATURE_KEY_FILE="D:/secure/fuota-sign.pem"
+CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.2.0+3"
 ```
 
-- `--slot-size 0x34000` = 208 KB（slot1）。
-- 版本号必须与后续 `pack_image` 的 `--version` 一致。
-- 不传 `--imgtool` 时会去 `PATH` 找；本机必须显式给路径。
+- 私钥只在受控签名环境或构建机，不能进仓库；
+- 版本四段 0–255，必须与 `pack_image` 的 `--version` 一致；
+- 槽参数与板级一致：RAK3372-F 是 `0x34000`。
+
+构建机不能持有私钥时，在签名环境直接用 imgtool：
+
+```powershell
+python bootloader\mcuboot\scripts\imgtool.py sign `
+  --key D:\secure\fuota-sign.pem --align 8 --version 1.2.0+3 `
+  --header-size 0x200 --slot-size 0x34000 --pad-header `
+  zephyr.bin zephyr.signed.bin
+```
+
+验签（必须用设备 Bootloader 对应的公钥）：
+
+```powershell
+python bootloader\mcuboot\scripts\imgtool.py verify `
+  --key D:\secure\fuota-sign-pub.pem zephyr.signed.bin
+```
+
+差分的新旧两版必须用同一把密钥签名。
+
+> 示例中的 `D:\secure\...` 是占位路径，按签名环境的实际目录替换。
 
 ## 3. 打包（全量）
 
@@ -90,10 +124,13 @@ python RZI\tools\builds\pack_image.py diff `
 
 **容量检查**：`fuota_delta` 只有 32 KB。
 
-| 场景 | 补丁 | 能否装下 |
-|---|---|---|
-| 同一构建 + 32B 改动 | 6,427 B | ✅ |
-| 真实两版（1.0.0+1 → 1.2.0+3） | **103,500 B** | ❌ |
+| 场景 | 基线/改动 | 补丁 | 能否装下 |
+|---|---|---|---|
+| A | 同一构建 + 32 B | 6,427 B | ✅ |
+| C-L1 | `76cb6ce` + 1 个函数 | 3,942 B | ✅ |
+| C-L2 | `76cb6ce` + 4 个函数 | 4,342 B | ✅ |
+| C-L3 | `76cb6ce` + 4.8 KB 代码 | 5,124 B | ✅ |
+| B | 11-17 → 11-26 跨构建 | **103,500 B** | ❌ 应走全量 |
 
 超过 32 KB 时 Server 必须回退全量包。
 

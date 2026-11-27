@@ -34,7 +34,7 @@
 
 | 任务 | 模块 | 主要代码 |
 |---|---|---|
-| 167 | 签名 | `tools/builds/sign_image.py` |
+| 167 | 签名 | 构建配置（`CONFIG_BOOT_SIGNATURE_KEY_FILE`）+ MCUboot `imgtool` |
 | 165 | 全量包 + 向量 | `tools/builds/pack_image.py`、`fuota_package.py` |
 | 169 | 差分包 | `pack_image.py diff`、`build/hpatch-host` |
 | 161 | 头校验 + 状态机 | `fuota_header.c`、`lorawan_fuota.c` |
@@ -43,6 +43,7 @@
 | 158 | 失败处理 | `lorawan_fuota.c`（`finish_window`） |
 
 > 阅读顺序建议：本章 → 第 1 章（包）→ 第 2 章（校验）→ 第 3 章（安装）→ 第 4 章（失败）→ 第 5 章（状态）→ 第 6 章（存储）。
+> **差分适用性（先看结论）**：增量小改适合差分（补丁≈代码增量）；大功能分支/配置或分区变化接近全量，应直接发全量。实测见 §1.1。
 
 ---
 
@@ -63,10 +64,11 @@ zephyr.bin --167 sign--> zephyr.signed.bin
 - 头 magic `@RAK`，CRC 只覆盖载荷。
 - 差分两侧都必须是**已签名镜像**，且用**同一把密钥**签名；否则主机验签不过。
 - 工具内部顺序：hdiffi 出补丁 → hpatchi 还原 → imgtool 验签 → 与目标镜像逐字节比对 → 才写包。
+- 签名：由构建系统（sysbuild 调用 imgtool）完成；构建机不能持有私钥时，在受控签名环境用 imgtool 签。发布与差分两版必须同钥。
 
 ### 代码位置
 
-- `sign_image.py`：调用 `imgtool sign --pad-header`，拒绝仓库内密钥和示例密钥。
+- 签名：`zephyr.signed.bin` 由 sysbuild 的 imgtool 生成；仓库不提供签名脚本。
 - `pack_image.py pack/vectors/verify`：统一走 `fuota_package.build_firmware()`。
 - `pack_image.py diff`：在 `build_firmware()` 前插补丁、后插主机验收。
 
@@ -75,9 +77,27 @@ zephyr.bin --167 sign--> zephyr.signed.bin
 | 点 | 说明 |
 |---|---|
 | 密钥 | sysbuild 默认用 `root-rsa-2048.pem`；测试签名要用同一把，否则 `No signature found` |
-| 容量 | 同构建小改补丁 6,427 B；真实两版 103,500 B，**32 KB `fuota_delta` 装不下**，必须回退全量 |
+| 容量 | 增量改动约 1:1 生成补丁；大改动接近全量。见 §1.1 实测 |
 | 旧格式 | `FUOT` 向量已作废，统一 `@RAK` |
 
+### 1.1 差分容量实测（A/B/C）
+
+| 场景 | 基线 | 改动 | 补丁 | 结论 |
+|---|---|---|---|---|
+| A | 同一构建 | +32 B 探针 | 6,427 B | 最小增量，适合差分 |
+| B | 11-17 构建（末字节改 1 B） | 11-26 构建（跨 5 提交 + 本次接线） | **103,500 B** | 改动过大，**应走全量** |
+| C-L1 | `76cb6ce` | +44 B（1 个函数） | 3,942 B | 增量≈1:1 |
+| C-L2 | `76cb6ce` | +260 B（4 个函数） | 4,342 B | 增量≈1:1 |
+| C-L3 | `76cb6ce` | +4.8 KB（4 KB 表 + 8 函数） | 5,124 B | 仍远小于 32 KB |
+
+结论：
+
+1. **同产品线的增量改动适合差分**，补丁与代码增量近似 1:1，另有约 3.9 KB 固定开销；
+2. **32 KB `fuota_delta` 约可覆盖 25–30 KB 的代码增量**；
+3. **大功能分支、配置/分区变化不适合差分**：镜像大面积重排，补丁接近全量（B 场景 103.5 KB），应直接发全量；
+4. 判定规则：补丁 ≤ 32 KB 走差分，否则回退全量。
+
+> A/B/C 的完整条件与复现命令见 `notes/C1-测量记录.md`（不随代码提交）。
 ---
 
 ## 2. 接收与头校验（161）

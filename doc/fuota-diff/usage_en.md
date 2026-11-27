@@ -2,7 +2,7 @@
 
 Date: 2026-11-26
 Applies to: `feat/fuota-diff` (based on `fuota a70713b`)
-Environment: Windows + west workspace `D:\Git_code\rzi-workspace`
+Environment: Windows + west workspace (run the commands below from the west workspace root; the repository lives in `RZI/`)
 
 ---
 
@@ -16,7 +16,8 @@ Environment: Windows + west workspace `D:\Git_code\rzi-workspace`
 | imgtool | `bootloader\mcuboot\scripts\imgtool.py` | signing and verification |
 | test keys | `build\keys\test_3172-f.pem` (private), `test_3172-f-pub.pem` (public) | test only, never release |
 
-> The private key must stay outside the repository; `sign_image.py` rejects in-repo paths and MCUboot sample keys.
+> The signing key is held by the build system or the controlled signing environment and must never enter the repository.
+> `hdiffi`/`hpatchi` are not in the repository; see `tools/builds/README.md` for the build steps (`west update`, then `make ZLIB=0 LZMA=0` in `modules/HPatchLite`).
 
 ## 1. Build
 
@@ -26,8 +27,10 @@ west build --sysbuild -b rak3372_f/stm32wle5xx -d build/merge-nodiff rzi/samples
 
 # Diff enabled
 west build --sysbuild -b rak3372_f/stm32wle5xx -d build/merge-check rzi/samples/lorawan/fuota `
-  -- "-DEXTRA_CONF_FILE=build/diff-enable.conf"
+  -- "-DEXTRA_CONF_FILE=$($PWD.Path)\build\diff-enable.conf"
 ```
+
+> A relative `EXTRA_CONF_FILE` is resolved against the application directory, so pass an absolute path (the command above uses `$PWD`).
 
 `build/diff-enable.conf`:
 
@@ -37,20 +40,51 @@ CONFIG_RZI_LORAWAN_FUOTA_DIFF=y
 
 Outputs: `build/<dir>/fuota/zephyr/zephyr.bin` (unsigned) and `zephyr.signed.bin` (signed by sysbuild).
 
-## 2. Sign
+### 1.1 Feature switches
 
-```powershell
-python RZI\tools\builds\sign_image.py build\merge-check\fuota\zephyr\zephyr.bin `
-  -o out\new.signed.bin `
-  --key build\keys\test_3172-f.pem `
-  --version 1.2.0+3 `
-  --header-size 0x200 --slot-size 0x34000 --align 8 `
-  --imgtool bootloader\mcuboot\scripts\imgtool.py
+| Feature | Switch | Default | Notes |
+|---|---|---|---|
+| FUOTA component | `CONFIG_RZI_LORAWAN_FUOTA` | `y` in the sample | when off, 156/157/158/161 are not compiled |
+| Delta decoder | `CONFIG_RZI_LORAWAN_FUOTA_DIFF` | `n` | links `hpatch_lite`/`tuz_dec` only when on; with it off a `RAK0` session can still be created but installation returns `-RZI_ERR_NOT_SUPPORTED` |
+| Header cache fallback offset | `CONFIG_RZI_LORAWAN_FUOTA_HEADER_OFFSET` | `0` | only for boards without a `scratch` partition |
+| Build signing | `CONFIG_BOOT_SIGNATURE_KEY_FILE`, `CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION` | board level | see section 2 |
+
+157/158/161 have no separate switch; they are compiled with `CONFIG_RZI_LORAWAN_FUOTA` and take effect automatically.
+
+## 2. Signing (done by the build)
+
+This repository does **not** provide a signing script. Signing is done by the build system: sysbuild calls MCUboot's `imgtool` and produces `zephyr.signed.bin`.
+
+Build configuration (`prj.conf` or an extra conf):
+
+```conf
+CONFIG_BOOT_SIGNATURE_KEY_FILE="D:/secure/fuota-sign.pem"
+CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="1.2.0+3"
 ```
 
-- `--slot-size 0x34000` = 208 KB (slot1).
-- The version must match `--version` passed to `pack_image`.
-- Without `--imgtool` the tool searches `PATH`; on this machine pass the path explicitly.
+- The private key lives only in the controlled signing environment or on the build machine and must never enter the repository;
+- the version has four fields, 0-255, and must match `--version` passed to `pack_image`;
+- the slot size must match the board: RAK3372-F uses `0x34000`.
+
+When the build machine cannot hold the private key, sign directly in the signing environment:
+
+```powershell
+python bootloader\mcuboot\scripts\imgtool.py sign `
+  --key D:\secure\fuota-sign.pem --align 8 --version 1.2.0+3 `
+  --header-size 0x200 --slot-size 0x34000 --pad-header `
+  zephyr.bin zephyr.signed.bin
+```
+
+Verify with the public key that the device bootloader holds:
+
+```powershell
+python bootloader\mcuboot\scripts\imgtool.py verify `
+  --key D:\secure\fuota-sign-pub.pem zephyr.signed.bin
+```
+
+Both versions of a diff package must be signed with the same key.
+
+> `D:\secure\...` in the examples is a placeholder; replace it with the real directory of the signing environment.
 
 ## 3. Package (full image)
 
@@ -90,10 +124,13 @@ Internally the tool runs hdiffi, restores with hpatchi, verifies the signature w
 
 **Capacity check**: `fuota_delta` is only 32 KB.
 
-| Scenario | Patch | Fits? |
-|---|---|---|
-| Same build + 32 B change | 6,427 B | yes |
-| Two real versions (1.0.0+1 to 1.2.0+3) | **103,500 B** | no |
+| Scenario | Baseline / change | Patch | Fits? |
+|---|---|---|---|
+| A | same build + 32 B | 6,427 B | yes |
+| C-L1 | `76cb6ce` + 1 function | 3,942 B | yes |
+| C-L2 | `76cb6ce` + 4 functions | 4,342 B | yes |
+| C-L3 | `76cb6ce` + 4.8 KB of code | 5,124 B | yes |
+| B | 11-17 to 11-26 cross-build | **103,500 B** | no, use full |
 
 When the patch exceeds 32 KB the Server must fall back to the full image.
 

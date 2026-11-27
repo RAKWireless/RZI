@@ -34,7 +34,7 @@ Organization: chapters follow the **runtime order**, each tagged with the ticket
 
 | Ticket | Module | Main code |
 |---|---|---|
-| 167 | signing | `tools/builds/sign_image.py` |
+| 167 | signing | build configuration (`CONFIG_BOOT_SIGNATURE_KEY_FILE`) + MCUboot `imgtool` |
 | 165 | full package + vectors | `tools/builds/pack_image.py`, `fuota_package.py` |
 | 169 | delta package | `pack_image.py diff`, `build/hpatch-host` |
 | 161 | header checks + state machine | `fuota_header.c`, `lorawan_fuota.c` |
@@ -43,6 +43,7 @@ Organization: chapters follow the **runtime order**, each tagged with the ticket
 | 158 | failure handling | `lorawan_fuota.c` (`finish_window`) |
 
 > Suggested reading order: this chapter, then chapter 1 (package), 2 (checks), 3 (install), 4 (failure), 5 (state), 6 (storage).
+> **Diff applicability (short version)**: incremental changes suit diffing (patch ~ code change); large feature branches and configuration/partition changes approach the full image and should ship full. Measurements in section 1.1.
 
 ---
 
@@ -63,10 +64,11 @@ zephyr.bin --167 sign--> zephyr.signed.bin
 - Header magic `@RAK`; the CRC covers the payload only.
 - Both sides of a delta must be **signed images** signed with the **same key**, otherwise host verification fails.
 - Tool order: hdiffi produces the patch, hpatchi restores it, imgtool verifies the signature, the result is compared byte-for-byte with the target image, and only then is the package written.
+- Signing: done by the build system (sysbuild invokes imgtool); when the build machine cannot hold the private key, sign with imgtool in the controlled signing environment. Both versions of a diff must share the key.
 
 ### Code location
 
-- `sign_image.py`: calls `imgtool sign --pad-header`; rejects in-repo keys and sample keys.
+- Signing: `zephyr.signed.bin` is produced by sysbuild's imgtool; the repository provides no signing script.
 - `pack_image.py pack/vectors/verify`: all go through `fuota_package.build_firmware()`.
 - `pack_image.py diff`: inserts the patch before `build_firmware()` and the host acceptance after it.
 
@@ -75,9 +77,27 @@ zephyr.bin --167 sign--> zephyr.signed.bin
 | Item | Note |
 |---|---|
 | Key | sysbuild defaults to `root-rsa-2048.pem`; the test signature must use the same key or you get `No signature found` |
-| Capacity | same-build small change is 6,427 B; two real versions are 103,500 B, which **does not fit the 32 KB `fuota_delta`**, so the Server must fall back to full |
+| Capacity | incremental changes produce patches close to 1:1; large changes approach the full image. See section 1.1 |
 | Old format | `FUOT` vectors are obsolete; use `@RAK` |
 
+### 1.1 Measured diff capacity (A/B/C)
+
+| Scenario | Baseline | Change | Patch | Conclusion |
+|---|---|---|---|---|
+| A | same build | +32 B probe | 6,427 B | minimal increment, diff works |
+| B | 11-17 build (last byte changed) | 11-26 build (5 upstream commits + this wiring) | **103,500 B** | too large, **use the full image** |
+| C-L1 | `76cb6ce` | +44 B (one function) | 3,942 B | increment ~1:1 |
+| C-L2 | `76cb6ce` | +260 B (four functions) | 4,342 B | increment ~1:1 |
+| C-L3 | `76cb6ce` | +4.8 KB (4 KB table + 8 functions) | 5,124 B | still far below 32 KB |
+
+Conclusions:
+
+1. **Incremental changes on the same product line suit diffing**; the patch tracks the code change roughly 1:1, with about 3.9 KB of fixed overhead.
+2. **The 32 KB `fuota_delta` covers roughly 25-30 KB of code change.**
+3. **Large feature branches and configuration/partition changes do not suit diffing**: the image is relaid out and the patch approaches the full image (scenario B, 103.5 KB), so ship the full image.
+4. Rule: patch <= 32 KB uses diff, otherwise fall back to full.
+
+> Full conditions and reproduction commands for A/B/C are in `notes/C1-测量记录.md` (not committed).
 ---
 
 ## 2. Reception and header checks (161)
